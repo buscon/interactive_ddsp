@@ -40,9 +40,10 @@ Output, in <sentire folder>/Recordings/Dataset_<date>/ (or `folder`):
 
 Limits:
   - There is ONE sensor channel: Sentire's single post-scaling signal, 0..1. The value
-    reaching 1 is the touch event, and while it stays at 1 the sound changes with the
-    seconds spent in touch. "Seconds in touch" is not in the csv; derive it from the
-    sensor column (count while the value is 1) in preprocessing, and the same way live.
+    reaching thresholdTouch (0.98) is the touch event, and while it stays at or above it
+    the sound changes with the seconds spent in touch. "Seconds in touch" is not in the
+    csv; derive it from the sensor column (count while the value is >= 0.98) in
+    preprocessing, and the same way live.
   - trajectory_start_s is measured in the language, so it is accurate to a few ms, not
     to the sample. It is good enough for a 100 Hz control rate, but the sync check
     (issue "Record replay dataset with sync check") should confirm it.
@@ -71,7 +72,9 @@ var settings = (
 	seed: 2026,           // same seed -> same trajectories
 	nTrajectories: 20,    // unique sensor curves. 20 x 60 s = 600 chunks of 2 s
 	trajectoryDur: 60,    // s, long enough to contain holds of 30 s and more
-	// A touch is the signal reaching 1; the sound then changes with the seconds spent in touch.
+	// A touch is the signal reaching thresholdTouch (Sentire's value); the sound then changes
+	// with the seconds spent in touch. Random ramps stay at or below 0.95, so they never touch.
+	thresholdTouch: 0.98,
 	touchHoldShort: [0.3, 3.0],   // s, short touches: mostly only the touch sound, little stay-in-touch change
 	touchHoldLong: [5.0, 45.0],   // s, long holds: the sound keeps changing over about 30 s
 	pLongTouch: 0.5,              // probability that a touch is a long hold
@@ -171,6 +174,7 @@ writeInfo = {
 		file.write("lead_s: %\n".format(settings[\lead]));
 		file.write("tail_s: %\n".format(settings[\tail]));
 		file.write("touchRise_s: %\n".format(settings[\touchRise]));
+		file.write("thresholdTouch: %\n".format(settings[\thresholdTouch]));
 		file.write("touchHoldShort_s: %\n".format(settings[\touchHoldShort]));
 		file.write("touchHoldLong_s: %\n".format(settings[\touchHoldLong]));
 		file.write("pLongTouch: %\n".format(settings[\pLongTouch]));

@@ -56,11 +56,11 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 ## Sensor Signal and Touch
 
 - Sentire gives **one channel**, 0 to 1, from the distance between two persons.
-- The value reaching **1 is the touch event**. While the persons stay in touch, the sound keeps changing with the seconds since the touch began; the change goes on for about 30 s.
+- The value reaching **0.98 (`thresholdTouch`) is the touch event**. While the persons stay in touch, the sound keeps changing with the seconds since the touch began; the change goes on for about 30 s.
 - A "trajectory" in this plan means only this value over time (one sensor curve per recording), not a spatial path.
-- **Consequence for the model:** it trains on 2 s chunks, so a chunk inside a long touch cannot show how long the touch has lasted. Add a derived input `touch_time` (seconds the value has stayed at 1, else 0), computed in preprocessing and computed the same way live. The GRU alone would average over the touch duration.
+- **Consequence for the model:** it trains on 2 s chunks, so a chunk inside a long touch cannot show how long the touch has lasted. Add a derived input `touch_time` (seconds the value has stayed at or above 0.98, else 0), computed in preprocessing and computed the same way live. The GRU alone would average over the touch duration.
 - **Consequence for the dataset:** it needs both short touches (touch sound only) and long holds (stay-in-touch change). Touches in the recording script are short (0.3-3 s) or long (5-45 s), 50/50.
-- **Open:** what threshold counts as "reached 1" in Sentire (exactly 1.0 or e.g. 0.98); it fixes how `touch_time` is derived.
+- **Touch threshold:** Sentire defines a touch as the value reaching `thresholdTouch: 0.98`. So `touch_time` counts the seconds the value has stayed at or above 0.98, and is 0 below it. The recording script's random ramps stay at or below 0.95, so they never trigger a touch by accident; touches are made by an explicit rise to 1.
 
 ---
 
@@ -139,7 +139,7 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
        mean: 0.5
        std: 0.3
    derived:
-     - name: touch_time     # seconds the value has stayed at 1, 0 otherwise
+     - name: touch_time     # seconds the value has stayed >= 0.98 (thresholdTouch), 0 otherwise
    ```
    (Sentire has one channel, so the example now lists that channel plus the derived input. The list format still allows more sensors later.)
 
