@@ -1,0 +1,11 @@
+# environments and caches
+.venv/
+__pycache__/
+*.pyc
+
+# generated data, training runs and renders (large, reproducible)
+preprocessed/
+runs/
+out.wav
+generated.wav
+my_drive_cycle.csv
