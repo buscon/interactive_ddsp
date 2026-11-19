@@ -1,5 +1,5 @@
 data:
-  data_location: /path/to/your/4channel/files   # EDIT ME
+  data_location: ~/Documents/st8_engine/procedural-engine-sounds/dataset/audio/ # EDIT ME
   extension: "wav"                              # EDIT ME if not .wav
 
 preprocess:
