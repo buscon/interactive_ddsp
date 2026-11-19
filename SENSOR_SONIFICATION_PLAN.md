@@ -53,6 +53,27 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 
 ---
 
+## Sensor Signal and Touch
+
+- Sentire gives **one channel**, 0 to 1, from the distance between two persons.
+- The value reaching **1 is the touch event**. While the persons stay in touch, the sound keeps changing with the seconds since the touch began; the change goes on for about 30 s.
+- A "trajectory" in this plan means only this value over time (one sensor curve per recording), not a spatial path.
+- **Consequence for the model:** it trains on 2 s chunks, so a chunk inside a long touch cannot show how long the touch has lasted. Add a derived input `touch_time` (seconds the value has stayed at 1, else 0), computed in preprocessing and computed the same way live. The GRU alone would average over the touch duration.
+- **Consequence for the dataset:** it needs both short touches (touch sound only) and long holds (stay-in-touch change). Touches in the recording script are short (0.3-3 s) or long (5-45 s), 50/50.
+- **Open:** what threshold counts as "reached 1" in Sentire (exactly 1.0 or e.g. 0.98); it fixes how `touch_time` is derived.
+
+---
+
+## Dataset Recording Script
+
+`sc/record_dataset.scd` records the dataset from Sentire:
+- 20 random, reproducible sensor curves of 60 s (seed in the settings), replayed through each of the sounds. 5 sounds = 100 files, about 115 min.
+- The curves are written to `trajectories/trajectory_NNN.csv` at 100 Hz (`time_s,sensor`), with `manifest.csv`, `events.csv` and `dataset_info.txt` next to the audio.
+- Curve start inside each audio file is measured in the language (a few ms). The sync check in the replay-dataset issue must confirm it.
+- Not yet run against a live Sentire setup: do a short test first (`nTrajectories: 2`, `trajectoryDur: 10`, one sound).
+
+---
+
 ## Phase 0: Prototype Bake-off (DDSP vs RAVE)
 
 **Purpose**: choose the backbone (DDSP in this repo, or RAVE with a sensor-to-latent mapper) from evidence before committing to the full plan.
@@ -60,8 +81,8 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 
 ### Shared test set (build once, use for both tracks)
 - 2-3 of the 10 sounds: at least one pitched/harmonic and one noisy or textural.
-- 1-2 sensors (e.g. proximity, touch).
-- About 20-30 unique trajectories, with at least 3 held out for validation.
+- The one Sentire sensor channel plus the derived time-in-touch input (see "Sensor Signal and Touch").
+- About 20-30 unique sensor curves, with at least 3 held out for validation.
 - Same trajectory-based split and the same held-out evaluation clips for both tracks.
 
 ### Track A: DDSP (about 4 h)
@@ -113,15 +134,14 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 2. Update `config.yaml`:
    ```yaml
    sensors:
-     - name: proximity
+     - name: sentire        # the single 0..1 channel (distance; 1 = touch)
        channel: 0
        mean: 0.5
        std: 0.3
-     - name: touch
-       channel: 1
-       mean: 0.2
-       std: 0.4
+   derived:
+     - name: touch_time     # seconds the value has stayed at 1, 0 otherwise
    ```
+   (Sentire has one channel, so the example now lists that channel plus the derived input. The list format still allows more sensors later.)
 
 3. Update `preprocess.py`:
    - Read sensor names from config
@@ -202,7 +222,7 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 ### Data Characteristics
 
 #### Must-Have Coverage
-- **Sensor range**: Full operational range (e.g., proximity 0.0-1.0)
+- **Sensor range**: Full range 0.0-1.0, including touches (value = 1) of short and long duration
 - **Motion variety**: Static + slow + fast movements
 - **Audio quality**: Clean, no clipping
 
@@ -260,7 +280,7 @@ The same recorded sensor trajectories can be replayed through about 10 different
 ### Week 1-2: 100-200 segments
 **Goal**: Test pipeline works
 
-- Start with 2 sensors (e.g., proximity + touch)
+- Start with the one Sentire channel plus the time-in-touch input
 - Use direct mapping first (no neural network)
 - Verify you can synthesize from sensor inputs
 - Then add neural refinement
