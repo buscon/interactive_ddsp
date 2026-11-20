@@ -88,16 +88,15 @@ class SensorDDSP(nn.Module):
         self.noise_head = nn.Linear(hidden_size, n_bands)
         self.f0_head = nn.Linear(hidden_size, 1)
         
-        # Reverb: use length=sampling_rate (1 second) like original EngineDDSP
-        # The original used Reverb(sampling_rate, sampling_rate) which sets length=48000
-        self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate)
-        
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
         
-        # Reverb: use length=sampling_rate (1 second) like original EngineDDSP
-        # The original used Reverb(sampling_rate, sampling_rate) which sets length=48000
-        self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate)
+        # Reverb: 1 s impulse response as in the original EngineDDSP. initial_wet=-5
+        # (sigmoid ~ 0.007) starts almost dry: the original default (wet=0 -> 0.5)
+        # amplifies the untrained output ~25x (measured RMS 0.84 vs 0.034 dry,
+        # target RMS ~0.06). The wet level is still learned.
+        self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate,
+                             initial_wet=-5)
     
     def forward(self, sensor, touch, sound_id):
         """
