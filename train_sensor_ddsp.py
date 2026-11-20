@@ -55,37 +55,6 @@ class FixedChunkDataset(torch.utils.data.Dataset):
         }
 
 
-def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
-    """Evaluate model on validation items and return loss and per-sound losses."""
-    model.eval()
-    val_losses = []
-    sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
-    val_losses_by_sound = {s: [] for s in sound_names_ordered}
-    
-    with torch.no_grad():
-        for val_item in val_items:
-            # Prepare batch
-            audio = torch.from_numpy(val_item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
-            sensor = torch.from_numpy(val_item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-            touch = torch.from_numpy(val_item["touch"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-            sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
-            
-            pred = model(sensor, touch, sound_id).squeeze(-1)
-            val_l = model.loss_fn(pred, audio, scales, overlap)
-            val_losses.append(val_l.item())
-            
-            # Collect by sound
-            sound = val_item["sound"]
-            if sound in val_losses_by_sound:
-                val_losses_by_sound[sound].append(val_l.item())
-    
-    model.train()
-    
-    if val_losses:
-        return np.mean(val_losses), val_losses_by_sound
-    return None, val_losses_by_sound
-
-
 def find_good_chunk(audio, touch_raw, min_touch_seconds=2.0, chunk_s=10.0, sr=48000, hop=480):
     """
     Find a chunk where touch_raw > 0 for at least min_touch_seconds.
@@ -129,18 +98,61 @@ def find_good_chunk(audio, touch_raw, min_touch_seconds=2.0, chunk_s=10.0, sr=48
     return best_offset, touch_seconds, chunk_audio, chunk_sensor, chunk_touch
 
 
-def compute_loss_on_fixed_chunk(model, audio, sensor, touch, sound_id, scales, overlap, device):
-    """Compute loss on a fixed chunk in eval mode."""
+def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
+    """Evaluate model on validation items and return loss and per-sound losses."""
     model.eval()
+    val_losses = []
+    silence_losses = []
+    sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
+    val_losses_by_sound = {s: [] for s in sound_names_ordered}
+    silence_by_sound = {s: [] for s in sound_names_ordered}
+    
     with torch.no_grad():
-        audio_t = torch.from_numpy(audio).unsqueeze(0).to(device)
-        sensor_t = torch.from_numpy(sensor).unsqueeze(0).unsqueeze(-1).to(device)
-        touch_t = torch.from_numpy(touch).unsqueeze(0).unsqueeze(-1).to(device)
-        sound_id_t = torch.tensor([sound_id], dtype=torch.long, device=device)
-        
-        pred = model(sensor_t, touch_t, sound_id_t).squeeze(-1)
-        loss = model.loss_fn(pred, audio_t, scales, overlap)
-    return loss.item()
+        for val_item in val_items:
+            # Prepare batch
+            audio = torch.from_numpy(val_item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
+            sensor = torch.from_numpy(val_item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
+            touch = torch.from_numpy(val_item["touch"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
+            sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
+            
+            pred = model(sensor, touch, sound_id).squeeze(-1)
+            val_l = model.loss_fn(pred, audio, scales, overlap)
+            val_losses.append(val_l.item())
+            
+            # Silence baseline
+            sil_l = model.silence_loss(audio, scales, overlap)
+            silence_losses.append(sil_l.item())
+            
+            # Collect by sound
+            sound = val_item["sound"]
+            if sound in val_losses_by_sound:
+                val_losses_by_sound[sound].append(val_l.item())
+            if sound in silence_by_sound:
+                silence_by_sound[sound].append(sil_l.item())
+    
+    model.train()
+    
+    # Compute means
+    val_loss = np.mean(val_losses) if val_losses else None
+    silence_loss = np.mean(silence_losses) if silence_losses else None
+    
+    return val_loss, silence_loss, val_losses_by_sound, silence_by_sound
+
+
+def prepare_batch(item, device, chunk_s):
+    """Prepare a validation batch."""
+    audio = torch.from_numpy(item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
+    sensor = torch.from_numpy(item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
+    touch = torch.from_numpy(item["touch"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
+    sound_id = torch.tensor([item["sound_id"]], dtype=torch.long, device=device)
+    return {
+        "audio": audio,
+        "sensor": sensor,
+        "touch": touch,
+        "sound_id": sound_id,
+        "sound": item["sound"],
+        "curve": item["curve"],
+    }
 
 
 def main():
@@ -148,11 +160,14 @@ def main():
     p.add_argument("--config", default="config_sensor.yaml")
     p.add_argument("--name", default="sensor_debug")
     p.add_argument("--root", default="runs/bakeoff_ddsp_poc")
-    p.add_argument("--steps", type=int, default=300)
+    p.add_argument("--steps", type=int, default=800)
     p.add_argument("--batch", type=int, default=1)
     p.add_argument("--overfit", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eval_every", type=int, default=250)
+    p.add_argument("--no_restart", action="store_true")
+    p.add_argument("--overfit_sound", default="03_harmonicSwarm")
+    p.add_argument("--overfit_curve", default="001")
     args = p.parse_args()
 
     # Load config
@@ -182,125 +197,6 @@ def main():
     f0_base = [f0_base_json[s]["f0_hz"] for s in sound_names]
     print(f" f0_base Hz: {f0_base}")
 
-    # Create model
-    model_config = config["model"].copy()
-    model_config["f0_base_hz"] = f0_base
-    model = SensorDDSP(**model_config).to(device)
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
-
-    # Create datasets
-    root = config["data"]["root"]
-    chunk_s = config["data"]["chunk_s"]
-    
-    # Training dataset
-    train_dataset = AlignedChunkDataset(
-        root, split="train", chunk_s=chunk_s, 
-        sounds=config["data"]["train_sounds"],
-        curves=config["data"]["train_curves"],
-        epoch_len=None, seed=args.seed, train=True
-    )
-    
-    # Validation dataset
-    val_dataset = AlignedChunkDataset(
-        root, split="val", chunk_s=chunk_s,
-        sounds=config["data"]["val_sounds"],
-        curves=config["data"]["val_curves"],
-        epoch_len=None, seed=args.seed, train=False
-    )
-
-    # Overfit mode: use one fixed file
-    if args.overfit:
-        # Find a good chunk from 03_harmonicSwarm, curve 001
-        test_item = train_dataset.full("03_harmonicSwarm", "001")
-        audio = test_item["audio"]
-        touch_raw = test_item["touch_raw"]
-        
-        offset, touch_seconds, chunk_audio, chunk_sensor, chunk_touch = find_good_chunk(
-            audio, touch_raw, 
-            min_touch_seconds=2.0, 
-            chunk_s=chunk_s
-        )
-        print(f"Overfit: using file 03_harmonicSwarm_001, offset {offset} frames ({offset/100:.2f}s), "
-              f"touch > 0 for {touch_seconds:.2f}s")
-        
-        # Create FixedChunkDataset that always returns the same chunk
-        fixed_dataset = FixedChunkDataset(
-            audio=chunk_audio,
-            sensor=chunk_sensor,
-            touch=chunk_touch,
-            touch_raw=test_item["touch_raw"][offset:offset+int(chunk_s*100)],
-            sound_id=test_item["sound_id"],
-            sound=test_item["sound"],
-            curve=test_item["curve"],
-            offset=offset
-        )
-        
-        train_loader = torch.utils.data.DataLoader(
-            fixed_dataset, batch_size=min(args.batch, 2), shuffle=False, drop_last=True
-        )
-        
-        # Store the fixed chunk for later evaluation
-        fixed_chunk = {
-            "audio": chunk_audio,
-            "sensor": chunk_sensor,
-            "touch": chunk_touch,
-            "sound_id": test_item["sound_id"],
-        }
-    else:
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=args.batch, shuffle=True, drop_last=True
-        )
-        fixed_chunk = None
-
-    # Validation: use ALL non-overlapping chunks from val_dataset
-    # val_dataset already returns deterministic non-overlapping chunks with train=False
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=8, shuffle=False, drop_last=False
-    )
-    
-    # Prepare val data for evaluation - collect all items
-    val_items = []
-    sound_curve_pairs = []
-    for sound in ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]:
-        for curve in ["017", "018", "019", "020"]:
-            sound_curve_pairs.append((sound, curve))
-    
-    for sound, curve in sound_curve_pairs:
-        item = val_dataset.full(sound, curve)
-        val_items.append(item)
-    
-    # Prepare val data for evaluation
-    def prepare_batch(item, device):
-        audio = torch.from_numpy(item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
-        sensor = torch.from_numpy(item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-        touch = torch.from_numpy(item["touch"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-        sound_id = torch.tensor([item["sound_id"]], dtype=torch.long, device=device)
-        return {
-            "audio": audio,
-            "sensor": sensor,
-            "touch": touch,
-            "sound_id": sound_id,
-            "sound": item["sound"],
-            "curve": item["curve"],
-        }
-
-    # Optimizer
-    lr_start = config["train"]["lr_start"]
-    lr_stop = config["train"]["lr_stop"]
-    decay_over = config["train"].get("decay_over", args.steps)
-    
-    opt = torch.optim.Adam(model.parameters(), lr=lr_start)
-    
-    # Gradient clipping
-    max_grad_norm = 5.0
-
-    # LR scheduler: linear decay then constant
-    def lr_at(step):
-        if step >= decay_over:
-            return lr_stop
-        t = step / decay_over
-        return lr_start * (1 - t) + lr_stop * t
-
     # Run directory
     run_dir = os.path.join(args.root, args.name)
     os.makedirs(run_dir, exist_ok=True)
@@ -326,221 +222,452 @@ def main():
     
     # CSV header with per-sound val columns
     sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
-    csv_header = "step,train_loss,val_loss," + ",".join([f"val_{s}" for s in sound_names_ordered]) + "\n"
+    csv_header = "step,train_loss,report_loss,val_loss,silence_loss," + ",".join([f"val_{s}" for s in sound_names_ordered]) + "," + ",".join([f"sil_{s}" for s in sound_names_ordered]) + "\n"
     log_file = open(os.path.join(run_dir, "train_log.csv"), "w")
     log_file.write(csv_header)
     
-    # Training loop
-    step = 0
-    best_val_loss = float("inf")
-    
-    scales = config["train"]["scales"]
-    overlap = config["train"]["overlap"]
-    
-    print(f"\nStarting training for {args.steps} steps")
-    print(f"Train dataset: {len(train_dataset)} items")
-    print(f"Val dataset: {len(val_dataset)} items")
-    print(f"Val evaluation every {args.eval_every} steps")
-    print()
-    
-    initial_loss = None
-    last_print_step = 0
-    last_eval_step = -args.eval_every  # Ensure we eval at step 0
-    start_time = time.time()
-    
-    # Initial evaluation at step 0 (before any updates)
-    val_loss, val_losses_by_sound = evaluate_model(
-        model, val_items, chunk_s, scales, overlap, device
-    )
-    best_val_loss = val_loss if val_loss is not None else float("inf")
-    
-    if val_loss is not None:
-        print(f"Initial val_loss: {val_loss:.6f}")
-    
-    # Overfit: track initial loss on fixed chunk (model will be in train mode after this)
-    initial_loss = None
-    if args.overfit:
-        initial_loss = compute_loss_on_fixed_chunk(
-            model, fixed_chunk["audio"], fixed_chunk["sensor"], fixed_chunk["touch"],
-            fixed_chunk["sound_id"], scales, overlap, device
+    # Training loop (may restart up to 3 times)
+    max_restarts = 3
+    for restart_num in range(max_restarts):
+        print(f"\n=== Training restart #{restart_num} ===")
+        
+        # Reset seeds for restart
+        torch.manual_seed(args.seed + restart_num)
+        np.random.seed(args.seed + restart_num)
+        random.seed(args.seed + restart_num)
+        
+        # Create model
+        model_config = config["model"].copy()
+        model_config["f0_base_hz"] = f0_base
+        model_config["tilt_init"] = True  # Always use tilted init
+        model = SensorDDSP(**model_config).to(device)
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+
+        # Create datasets
+        root = config["data"]["root"]
+        chunk_s = config["data"]["chunk_s"]
+        
+        # Training dataset
+        train_dataset = AlignedChunkDataset(
+            root, split="train", chunk_s=chunk_s, 
+            sounds=config["data"]["train_sounds"],
+            curves=config["data"]["train_curves"],
+            epoch_len=None, seed=args.seed + restart_num, train=True
         )
-        print(f"Initial loss on fixed chunk: {initial_loss:.6f}")
-        model.train()  # Reset to train mode after eval
-    
-    for epoch in range((args.steps // len(train_loader)) + 2):
-        for batch in train_loader:
+        
+        # Validation dataset
+        val_dataset = AlignedChunkDataset(
+            root, split="val", chunk_s=chunk_s,
+            sounds=config["data"]["val_sounds"],
+            curves=config["data"]["val_curves"],
+            epoch_len=None, seed=args.seed + restart_num, train=False
+        )
+
+        # Overfit mode: use one fixed file
+        if args.overfit:
+            # Find a good chunk from overfit_sound, overfit_curve
+            test_item = train_dataset.full(args.overfit_sound, args.overfit_curve)
+            audio = test_item["audio"]
+            touch_raw = test_item["touch_raw"]
+            
+            offset, touch_seconds, chunk_audio, chunk_sensor, chunk_touch = find_good_chunk(
+                audio, touch_raw, 
+                min_touch_seconds=2.0, 
+                chunk_s=chunk_s
+            )
+            print(f"Overfit: using file {args.overfit_sound}_{args.overfit_curve}, offset {offset} frames ({offset/100:.2f}s), "
+                  f"touch > 0 for {touch_seconds:.2f}s")
+            
+            # Create FixedChunkDataset that always returns the same chunk
+            fixed_dataset = FixedChunkDataset(
+                audio=chunk_audio,
+                sensor=chunk_sensor,
+                touch=chunk_touch,
+                touch_raw=test_item["touch_raw"][offset:offset+int(chunk_s*100)],
+                sound_id=test_item["sound_id"],
+                sound=test_item["sound"],
+                curve=test_item["curve"],
+                offset=offset
+            )
+            
+            train_loader = torch.utils.data.DataLoader(
+                fixed_dataset, batch_size=min(args.batch, 2), shuffle=False, drop_last=True
+            )
+            
+            # Store the fixed chunk for later evaluation
+            fixed_chunk = {
+                "audio": chunk_audio,
+                "sensor": chunk_sensor,
+                "touch": chunk_touch,
+                "sound_id": test_item["sound_id"],
+            }
+        else:
+            train_loader = torch.utils.data.DataLoader(
+                train_dataset, batch_size=args.batch, shuffle=True, drop_last=True
+            )
+            fixed_chunk = None
+
+        # Validation: use ALL non-overlapping chunks from val_dataset
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=8, shuffle=False, drop_last=False
+        )
+        
+        # Prepare val data for evaluation - collect all items
+        val_items = []
+        sound_curve_pairs = []
+        for sound in ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]:
+            for curve in ["017", "018", "019", "020"]:
+                sound_curve_pairs.append((sound, curve))
+        
+        for sound, curve in sound_curve_pairs:
+            item = val_dataset.full(sound, curve)
+            val_items.append(item)
+        
+        # Optimizer
+        lr_start = config["train"]["lr_start"]
+        lr_stop = config["train"]["lr_stop"]
+        decay_over = config["train"].get("decay_over", args.steps)
+        
+        # For overfit mode, use lr_start directly (3e-4 based on leader's diag scripts)
+        if args.overfit:
+            lr_start = 3e-4
+            decay_over = 1000  # Don't decay during overfit
+        
+        opt = torch.optim.Adam(model.parameters(), lr=lr_start)
+    step = 0
+    timing_window = 25
+    start_time = None
+    step_count = 0
+    model = create_model(args, seed=seed)  # Already done via create_model
+        
+        # Gradient clipping
+        max_grad_norm = 5.0
+
+        # LR scheduler: warm-up then constant (based on diag_curr.py)
+        def lr_at(step):
+            # Warm-up for first 100 steps: min(1.0, (step+1)/100)
+            warmup = min(1.0, (step + 1) / 100.0)
+            return lr_start * warmup
+
+        # Training loop
+        step = 0
+        best_val_loss = float("inf")
+        collapse_detected = False
+        rms_history = []  # Track last 10 RMS ratios for moving average check
+        
+        scales = config["train"]["scales"]
+        overlap = config["train"]["overlap"]
+        
+        print(f"\nStarting training for {args.steps} steps")
+        print(f"Train dataset: {len(train_dataset)} items")
+        print(f"Val dataset: {len(val_dataset)} items")
+        print(f"Val evaluation every {args.eval_every} steps")
+        print()
+        
+        last_print_step = 0
+        last_print_time = time.time()  # Track when we last printed for steps/sec
+        step_times = []  # Track timestamps for steps in current 25-step window
+        last_eval_step = -args.eval_every  # Ensure we eval at step 0
+        
+        # Initial evaluation at step 0 (before any updates)
+        val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
+            model, val_items, chunk_s, scales, overlap, device
+        )
+        best_val_loss = val_loss if val_loss is not None else float("inf")
+        
+        if val_loss is not None:
+            print(f"Initial val_loss: {val_loss:.6f}, silence_loss: {silence_loss:.6f}")
+            model.train()  # Reset to train mode after eval
+        
+        for epoch in range((args.steps // len(train_loader)) + 2):
+            for batch in train_loader:
+                if step >= args.steps:
+                    break
+                    
+                # Update LR
+                for g in opt.param_groups:
+                    g["lr"] = lr_at(step)
+                
+                # Move to device
+                audio = batch["audio"].to(device)
+                sensor = batch["sensor"].to(device).unsqueeze(-1)
+                touch = batch["touch"].to(device).unsqueeze(-1)
+                sound_id = batch["sound_id"].to(device)
+                
+                # Forward
+                pred = model(sensor, touch, sound_id).squeeze(-1)  # (B, L)
+                
+                # Compute curriculum loss
+                loss = model.loss_curriculum(pred, audio, scales, overlap, step)
+                
+                # Compute report loss (comparable loss_fn)
+                report_loss = model.loss_fn(pred, audio, scales, overlap)
+                
+                # Backward
+                opt.zero_grad()
+                loss.backward()
+                
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                
+                opt.step()
+                
+                # Check for collapse every 25 steps starting at step 400 (not 300, to avoid false positives during ramp)
+                # Also check at evaluation points
+                if step >= 400 and step % args.eval_every == 0:
+                    pred_rms = pred.pow(2).mean().sqrt().item()
+                    target_rms = audio.pow(2).mean().sqrt().item()
+                    rms_ratio = pred_rms / (target_rms + 1e-8)
+                    
+                    # Track RMS history for moving average check
+                    rms_history.append(rms_ratio)
+                    if len(rms_history) > 10:
+                        rms_history.pop(0)
+                    
+                    # Check for collapse: current RMS ratio or moving average too low
+                    current_collapse = rms_ratio < 0.1
+                    avg_rms = sum(rms_history) / len(rms_history) if rms_history else 0
+                    avg_collapse = avg_rms < 0.1
+                    
+                    if current_collapse or avg_collapse:
+                        collapse_detected = True
+                        print(f"  COLLAPSE DETECTED at step {step}: RMS ratio {rms_ratio:.6f}, avg {avg_rms:.6f}")
+                        
+                        if not args.no_restart and restart_num < max_restarts - 1:
+                            print(f"  Restarting training with seed {args.seed + restart_num + 1}")
+                            # Break out of all loops and restart
+                            break
+                        else:
+                            print(f"  Continuing with --no_restart or max restarts reached")
+                
+                # Track timestamp after each step for timing measurements
+                step_times.append(time.time())
+                
+                # Logging - print every 25 steps with steps/sec
+                # Always evaluate at step 0, eval_every, and last step
+                val_loss = None
+                silence_loss = None
+                val_losses_by_sound = {}
+                
+                should_eval = (step == 0) or (step % args.eval_every == 0) or (step == args.steps - 1)
+                
+                if should_eval:
+                    val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
+                        model, val_items, chunk_s, scales, overlap, device
+                    )
+                    
+                    # Save best model after evaluation
+                    if val_loss is not None and val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        torch.save(model.state_dict(), os.path.join(run_dir, "state_best.pth"))
+                        print(f"  New best val_loss: {val_loss:.6f}")
+                
+                # Also print at the last step (even if not 25 steps from last)
+                should_print = (step - last_print_step >= 25) or (step == args.steps - 1)
+                
+                if should_print and len(step_times) >= 2:
+                    # Calculate time elapsed since last_print_step
+                    # step_times[-1] is time after current step, step_times[0] is time after last_print_step
+                    # But we want to count steps from last_print_step to step (inclusive)
+                    # So we measure from step_times[last_print_step % 25] to step_times[-1]
+                    
+                    # Find the index of the first timestamp in this 25-step window
+                    window_start_idx = max(0, len(step_times) - 26)  # Include 25 steps: 26 timestamps
+                    step_start_time = step_times[window_start_idx] if window_start_idx < len(step_times) else step_times[0]
+                    step_end_time = step_times[-1]
+                    
+                    # Use sync for accurate CUDA timing
+                    torch.cuda.synchronize()
+    elapsed = time.time() - start_time
+    steps_per_sec = timing_window / elapsed
+    print(f"Steps/sec: {steps_per_sec:.2f}")
+    start_time = time.time()
+                    
+                    step_time = step_end_time - step_start_time
+                    steps_sec = 25.0 / step_time if step_time > 0 else 0
+                    
+                    # Log to CSV
+                    val_loss_str = f"{val_loss:.6f}" if val_loss is not None else ""
+                    silence_loss_str = f"{silence_loss:.6f}" if silence_loss is not None else ""
+                    val_by_sound_str = ",".join([
+                        f"{np.mean(val_losses_by_sound.get(s, [])):.6f}" if val_losses_by_sound.get(s, []) else ""
+                        for s in sound_names_ordered
+                    ])
+                    sil_by_sound_str = ",".join([
+                        f"{np.mean(silence_by_sound.get(s, [])):.6f}" if silence_by_sound.get(s, []) else ""
+                        for s in sound_names_ordered
+                    ])
+                    log_file.write(f"{step},{loss.item():.6f},{report_loss.item():.6f},{val_loss_str},{silence_loss_str},{val_by_sound_str},{sil_by_sound_str}\n")
+                    log_file.flush()
+                    
+                    # If we're also at a print step, print the val loss
+                    if should_eval:
+                        print(f"  Val by sound:")
+                        for s in sound_names_ordered:
+                            if val_losses_by_sound.get(s, []):
+                                print(f"    {s}: val_loss={np.mean(val_losses_by_sound[s]):.6f}, silence_loss={np.mean(silence_by_sound.get(s, [])):.6f}")
+                    
+                    if val_loss is not None:
+                        print(f"step {step:5d}  train_loss {loss.item():.6f}  report_loss {report_loss.item():.6f}  val_loss {val_loss:.6f}  silence_loss {silence_loss:.6f}  lr {lr_at(step):.2e}  steps/sec {steps_sec:.2f}")
+                    else:
+                        print(f"step {step:5d}  train_loss {loss.item():.6f}  report_loss {report_loss.item():.6f}  lr {lr_at(step):.2e}  steps/sec {steps_sec:.2f}")
+                    
+                    last_print_step = step
+                    # Clear step_times for next window (keep only what we need for overlap)
+                    step_times = []
+                
+                # TensorBoard logging
+                writer.add_scalar("loss/train", loss.item(), step)
+                writer.add_scalar("loss/report", report_loss.item(), step)
+                writer.add_scalar("lr", lr_at(step), step)
+                
+                # Reverb params
+                if step >= 400 and step % args.eval_every == 0:
+                    writer.add_scalar("reverb_decay", model.reverb.decay.item(), step)
+                    writer.add_scalar("reverb_wet", model.reverb.wet.item(), step)
+                
+                step += 1
+            
             if step >= args.steps:
                 break
-                
-            # Update LR
-            for g in opt.param_groups:
-                g["lr"] = lr_at(step)
             
-            # Move to device
-            audio = batch["audio"].to(device)
-            sensor = batch["sensor"].to(device).unsqueeze(-1)
-            touch = batch["touch"].to(device).unsqueeze(-1)
-            sound_id = batch["sound_id"].to(device)
-            
-            # Forward
-            pred = model(sensor, touch, sound_id).squeeze(-1)  # (B, L)
-            
-            # Compute loss
-            loss = model.loss_fn(pred, audio, scales, overlap)
-            
-            # Backward
-            opt.zero_grad()
-            loss.backward()
-            
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            
-            opt.step()
-            
-            # Logging - print every 25 steps with steps/sec
-            # Always evaluate at step 0, eval_every, and last step
-            val_loss = None
-            val_losses_by_sound = {}
-            
-            should_eval = (step == 0) or (step % args.eval_every == 0) or (step == args.steps - 1)
-            
-            if should_eval:
-                val_loss, val_losses_by_sound = evaluate_model(
-                    model, val_items, chunk_s, scales, overlap, device
-                )
-                
-                # Save best model after evaluation
-                if val_loss is not None and val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    torch.save(model.state_dict(), os.path.join(run_dir, "state_best.pth"))
-                    print(f"  New best val_loss: {val_loss:.6f}")
-                
-                # If we're also at a print step, print the val loss
-                should_print = (step - last_print_step >= 25) or (step == args.steps - 1)
-                if should_print:
-                    print(f"  Val by sound:")
-                    for s in sound_names_ordered:
-                        if val_losses_by_sound.get(s, []):
-                            print(f"    {s}: {np.mean(val_losses_by_sound[s]):.6f}")
-            
-            should_print = (step - last_print_step >= 25) or (step == args.steps - 1)
-            
-            if should_print:
-                # Measure time for 25 steps using wall clock
-                torch.cuda.synchronize()
-                step_start_time = time.time()
-                
-                # Calculate steps/sec for last 25 training steps
-                torch.cuda.synchronize()
-                step_time = time.time() - step_start_time
-                steps_sec = 25.0 / step_time if step_time > 0 else 0
-                
-                # Log to CSV
-                val_loss_str = f"{val_loss:.6f}" if val_loss is not None else ""
-                val_by_sound_str = ",".join([
-                    f"{np.mean(val_losses_by_sound.get(s, [])):.6f}" if val_losses_by_sound.get(s, []) else ""
-                    for s in sound_names_ordered
-                ])
-                log_file.write(f"{step},{loss.item():.6f},{val_loss_str},{val_by_sound_str}\n")
-                log_file.flush()
-                
-                # Print status
-                if val_loss is not None:
-                    print(f"step {step:5d}  train_loss {loss.item():.6f}  val_loss {val_loss:.6f}  "
-                          f"lr {lr_at(step):.2e}  steps/sec {steps_sec:.2f}")
-                    # Per-sound means
-                    print(f"  Val by sound:")
-                    for s in sound_names_ordered:
-                        if val_losses_by_sound[s]:
-                            print(f"    {s}: {np.mean(val_losses_by_sound[s]):.6f}")
-                else:
-                    print(f"step {step:5d}  train_loss {loss.item():.6f}  lr {lr_at(step):.2e}  steps/sec {steps_sec:.2f}")
-                
-                last_print_step = step
-            
-            # TensorBoard logging
-            writer.add_scalar("loss/train", loss.item(), step)
-            writer.add_scalar("lr", lr_at(step), step)
-            
-            # Reverb params
-            if step % args.eval_every == 0:
-                writer.add_scalar("reverb_decay", model.reverb.decay.item(), step)
-                writer.add_scalar("reverb_wet", model.reverb.wet.item(), step)
-            
-            step += 1
+            if collapse_detected and not args.no_restart and restart_num < max_restarts - 1:
+                break  # Restart
         
         if step >= args.steps:
             break
-    
-    # Final evaluation at last step (step 60)
-    if step != args.steps - 1:
-        # Eval at last step
-        val_loss, val_losses_by_sound = evaluate_model(
-            model, val_items, chunk_s, scales, overlap, device
-        )
         
-        if val_loss is not None:
-            print(f"  Val by sound:")
-            for s in sound_names_ordered:
-                if val_losses_by_sound.get(s, []):
-                    print(f"    {s}: {np.mean(val_losses_by_sound[s]):.6f}")
+        if collapse_detected and not args.no_restart and restart_num < max_restarts - 1:
+            print(f"  Restarting training with seed {args.seed + restart_num + 1}")
+            # Reset optimizer, step, and last_print_step before restarting
+            opt = torch.optim.Adam(model.parameters(), lr=lr_start)
+    step = 0
+    timing_window = 25
+    start_time = None
+    step_count = 0
+    model = create_model(args, seed=seed)  # Already done via create_model
+            step = 0
+            last_print_step = 0
+            continue  # Restart
     
-    # Final evaluation for final model
-    model.eval()
-    val_losses = []
-    val_losses_by_sound = {s: [] for s in sound_names_ordered}
-    with torch.no_grad():
-        for val_item in val_items:
-            val_batch = prepare_batch(val_item, device)
-            val_pred = model(
-                val_batch["sensor"], 
-                val_batch["touch"], 
-                val_batch["sound_id"]
-            ).squeeze(-1)
-            val_l = model.loss_fn(val_pred, val_batch["audio"], scales, overlap)
-            val_losses.append(val_l.item())
+    # End of restart loop - final evaluation runs only on normal completion (not on restart)
+    if step >= args.steps:
+        # Final evaluation at last step (step 60)
+        if step != args.steps - 1:
+            # Eval at last step
+            val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
+                model, val_items, chunk_s, scales, overlap, device
+            )
             
-            sound = val_batch["sound"]
-            if sound in val_losses_by_sound:
-                val_losses_by_sound[sound].append(val_l.item())
-    
-    final_val_loss = np.mean(val_losses)
-    
-    # Log final
-    val_loss_str = f"{final_val_loss:.6f}"
-    val_by_sound_str = ",".join([
-        f"{np.mean(val_losses_by_sound.get(s, [])):.6f}" if val_losses_by_sound.get(s, []) else ""
-        for s in sound_names_ordered
-    ])
-    log_file.write(f"{step},{loss.item():.6f},{val_loss_str},{val_by_sound_str}\n")
-    log_file.close()
-    writer.close()
-    
-    # Save final model
-    torch.save(model.state_dict(), os.path.join(run_dir, "state_final.pth"))
-    
-    print(f"\nTraining complete!")
-    print(f"  Final train loss: {loss.item():.6f}")
-    print(f"  Final val loss: {final_val_loss:.6f}")
-    print(f"  Best val loss: {best_val_loss:.6f}")
-    print(f"  Run directory: {run_dir}")
-    
-    # Overfit pass/fail check
-    if args.overfit:
-        final_loss = compute_loss_on_fixed_chunk(
-            model, fixed_chunk["audio"], fixed_chunk["sensor"], fixed_chunk["touch"],
-            fixed_chunk["sound_id"], scales, overlap, device
-        )
-        threshold = 0.6 * initial_loss
-        passed = final_loss <= threshold
+            if val_loss is not None:
+                print(f"  Val by sound:")
+                for s in sound_names_ordered:
+                    if val_losses_by_sound.get(s, []):
+                        print(f"    {s}: val_loss={np.mean(val_losses_by_sound[s]):.6f}, silence_loss={np.mean(silence_by_sound.get(s, [])):.6f}")
         
-        print(f"\nOverfit test:")
-        print(f"  Chunk offset: {offset} frames ({offset/100:.2f}s)")
-        print(f"  Touch seconds in chunk: {touch_seconds:.2f}s")
-        print(f"  Initial loss: {initial_loss:.6f}")
-        print(f"  Final loss: {final_loss:.6f}")
-        print(f"  Target (0.6 * initial): {threshold:.6f}")
-        print(f"  Result: {'PASS' if passed else 'FAIL'}")
+        # Final evaluation for final model
+        model.eval()
+        val_losses = []
+        silence_losses = []
+        val_losses_by_sound = {s: [] for s in sound_names_ordered}
+        silence_by_sound = {s: [] for s in sound_names_ordered}
+        with torch.no_grad():
+            for val_item in val_items:
+                val_batch = prepare_batch(val_item, device, chunk_s)
+                val_pred = model(
+                    val_batch["sensor"], 
+                    val_batch["touch"], 
+                    val_batch["sound_id"]
+                ).squeeze(-1)
+                val_l = model.loss_fn(val_pred, val_batch["audio"], scales, overlap)
+                sil_l = model.silence_loss(val_batch["audio"], scales, overlap)
+                
+                val_losses.append(val_l.item())
+                silence_losses.append(sil_l.item())
+                
+                sound = val_batch["sound"]
+                if sound in val_losses_by_sound:
+                    val_losses_by_sound[sound].append(val_l.item())
+                if sound in silence_by_sound:
+                    silence_by_sound[sound].append(sil_l.item())
+        
+        final_val_loss = np.mean(val_losses)
+        final_silence_loss = np.mean(silence_losses)
+        
+        # Log final
+        val_loss_str = f"{final_val_loss:.6f}"
+        silence_loss_str = f"{final_silence_loss:.6f}"
+        val_by_sound_str = ",".join([
+            f"{np.mean(val_losses_by_sound.get(s, [])):.6f}" if val_losses_by_sound.get(s, []) else ""
+            for s in sound_names_ordered
+        ])
+        sil_by_sound_str = ",".join([
+            f"{np.mean(silence_by_sound.get(s, [])):.6f}" if silence_by_sound.get(s, []) else ""
+            for s in sound_names_ordered
+        ])
+        log_file.write(f"{step},{loss.item():.6f},{report_loss.item():.6f},{val_loss_str},{silence_loss_str},{val_by_sound_str},{sil_by_sound_str}\n")
+        
+        print(f"\nTraining complete!")
+        print(f"  Final train loss: {loss.item():.6f}")
+        print(f"  Final report loss: {report_loss.item():.6f}")
+        print(f"  Final val loss: {final_val_loss:.6f}")
+        print(f"  Final silence loss: {final_silence_loss:.6f}")
+        print(f"  Best val loss: {best_val_loss:.6f}")
+        print(f"  Run directory: {run_dir}")
+        
+        # Save final model before closing log
+        torch.save(model.state_dict(), os.path.join(run_dir, "state_final.pth"))
+
+# After the outer for restart_num ... loop and its if step >= args.steps: break / continue handling
+        
+        # Close log file and tensorboard
+        log_file.close()
+        writer.close()
+        
+        # Overfit pass/fail check
+        if args.overfit:
+            # Evaluate on fixed chunk in eval mode
+            model.eval()
+            with torch.no_grad():
+                audio_t = torch.from_numpy(fixed_chunk["audio"]).unsqueeze(0).to(device)
+                sensor_t = torch.from_numpy(fixed_chunk["sensor"]).unsqueeze(0).unsqueeze(-1).to(device)
+                touch_t = torch.from_numpy(fixed_chunk["touch"]).unsqueeze(0).unsqueeze(-1).to(device)
+                sound_id_t = torch.tensor([fixed_chunk["sound_id"]], dtype=torch.long, device=device)
+                
+                pred = model(sensor_t, touch_t, sound_id_t).squeeze(0).squeeze(-1)
+                
+                # Loss
+                final_loss = model.loss_fn(pred, audio_t, scales, overlap).item()
+                silence_loss = model.silence_loss(audio_t, scales, overlap).item()
+                
+                # RMS ratio
+                pred_rms = pred.pow(2).mean().sqrt().item()
+                target_rms = audio_t.pow(2).mean().sqrt().item()
+                rms_ratio = pred_rms / (target_rms + 1e-8)
+                
+                # Peak
+                pred_peak = pred.abs().max().item()
+            
+            # Pass criteria:
+            # (i) final_loss < 0.6 * silence_loss
+            # (ii) rms_ratio in [0.4, 2.0]
+            # (iii) pred_peak > 1e-3
+            cond1 = final_loss < 0.6 * silence_loss
+            cond2 = 0.4 <= rms_ratio <= 2.0
+            cond3 = pred_peak > 1e-3
+            passed = cond1 and cond2 and cond3
+            
+            print(f"\nOverfit test:")
+            print(f"  Chunk offset: {offset} frames ({offset/100:.2f}s)")
+            print(f"  Touch seconds in chunk: {touch_seconds:.2f}s")
+            print(f"  Silence loss: {silence_loss:.6f}")
+            print(f"  Final loss: {final_loss:.6f}")
+            print(f"  RMS ratio: {rms_ratio:.6f}")
+            print(f"  Peak: {pred_peak:.6e}")
+            print(f"  PASS criteria: final_loss < 0.6 * silence_loss = {silence_loss * 0.6:.6f}: {cond1}")
+            print(f"               0.4 <= rms_ratio <= 2.0: {cond2}")
+            print(f"               peak > 1e-3: {cond3}")
+            print(f"  Result: {'PASS' if passed else 'FAIL'}")
 
 
 if __name__ == "__main__":
