@@ -2,25 +2,26 @@
 
 ## Quick Start (Recommended)
 
-### Option 1: Use the Standalone Script
+### Option 1: Combined Script (Best for Command Line)
 
-The standalone script auto-loads Sentire and starts recording automatically:
+This script loads Sentire first, then the recording script:
 
 ```bash
 cd ~/interactive_ddsp/sc
-./run_headless.sh
+./run_with_sentire.sh
 ```
 
 Or directly:
 ```bash
-pw-jack sclang ~/interactive_ddsp/sc/record_dataset_standalone.scd
+pw-jack sclang ~/interactive_ddsp/sc/record_with_sentire.scd
 ```
 
 **What it does:**
 1. Boots a JACK server
-2. Loads Sentire headless (if not already running)
-3. Waits for initialization
-4. Starts recording automatically
+2. Loads Sentire headless (`~/sentire/main-headless.scd`)
+3. Waits 3 seconds for initialization
+4. Loads the recording script automatically
+5. Starts recording
 
 ---
 
@@ -140,10 +141,10 @@ Use the standalone script (`record_dataset_standalone.scd`), not `record_dataset
 
 | File | Purpose |
 |------|---------|
-| `record_dataset_standalone.scd` | **Use this** - Self-contained, auto-boots Sentire |
-| `record_dataset.scd` | For IDE use (requires Sentire already loaded) |
-| `record_dataset_headless.scd` | Legacy wrapper (not recommended) |
-| `run_headless.sh` | Shell script wrapper for standalone |
+| `record_with_sentire.scd` | **Recommended** - Loads Sentire, then recording script |
+| `run_with_sentire.sh` | Shell wrapper for combined script |
+| `record_dataset.scd` | For IDE use (Sentire must be loaded first) |
+| `record_dataset_standalone.scd` | Alternative (may not work on all setups) |
 | `HEADLESS_RECORDING.md` | This documentation |
 
 ---
