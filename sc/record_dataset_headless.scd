@@ -2,22 +2,19 @@
 Auto-executing wrapper for headless dataset recording.
 
 This script:
-1. Checks if Sentire is already loaded (via -scdefs or manually)
+1. Checks if Sentire is already loaded
 2. If not, loads Sentire headless
 3. Waits for initialization
 4. Automatically executes the recording script
 
 Usage:
-    // Option 1: Load Sentire separately, then this script
-    sclang -scdefs "~/sentire/main-headless.scd"
-    // Then:
+    // From SuperCollider IDE (recommended):
     "~/interactive_ddsp/sc/record_dataset_headless.scd".load;
     
-    // Option 2: Load both together (Sentire must be first)
-    sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset_headless.scd"
+    // Or from command line:
+    pw-jack sclang ~/interactive_ddsp/sc/record_dataset_headless.scd
     
-    // Option 3: From SuperCollider IDE
-    "~/interactive_ddsp/sc/record_dataset_headless.scd".load;
+    The script will boot a server to keep sclang running.
 */
 
 var sentireFolder, mainHeadlessPath, recordingScriptPath, checkAndRun;
