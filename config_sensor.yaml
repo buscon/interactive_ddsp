@@ -1,0 +1,30 @@
+# SensorDDSP configuration
+# Proximity sensor + touch_time + sound_id -> audio
+
+data:
+  root: /home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned
+  chunk_s: 10.0
+  train_sounds: null  # null = all
+  val_sounds: null
+  train_curves: null  # null = all in train split
+  val_curves: null
+
+model:
+  n_sounds: 5
+  hidden_size: 512
+  n_harmonic: 100
+  n_bands: 65
+  sampling_rate: 48000
+  block_size: 480
+  sound_emb_dim: 16
+  max_f0_octaves: 1.0
+
+train:
+  batch: 8
+  lr_start: 1.0e-3
+  lr_stop: 1.0e-4
+  decay_over: 1000  # steps
+  scales: [4096, 2048, 1024, 512, 256, 128]
+  overlap: 0.75
+  steps: 2000
+  seed: 0
