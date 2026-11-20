@@ -4,7 +4,7 @@
 
 - **Dataset**: 100 files (20 curves × 5 sounds) from Sentire recordings, aligned with sensor time = audio − 1.0 s + 0.4 s physical delay
 - **Model**: SensorDDSP with sensor/touch MLPs, harmonic+noise synthesis, learnable reverb, curriculum loss, and tilted initialization
-- **Training**: 15 runs (13/15 passed core+ablation on training chunk), 2 silence collapses (01_canopy_1, 02_forestPad_2), band-shape correlation 0.75–1.0 on non-collapsed runs
+- **Training**: 15 runs (13/15 passed core+ablation on training chunk), 2 silence collapses (01_canopy_1, 02_forestPad_2), band-shape corr recomputed on all 15 overfit checkpoints: 0.38–1.00 (median ≈ 0.95)
 - **Stage B**: 2000 steps, batch 8, 0 restarts, validation loss 7.34 vs silence 23.22; held-out evaluation shows loss_ratio < 0.6, RMS ratio 0.44–0.78, peak 0.20–0.49, ablation rolled-corr mean 0.065
 - **Sensor Conditioning**: Evidence suggests sensor conditioning works, but further investigation needed for Curve-018 anomaly
 - **Caveats**: Centroid-envelope metric artifact, per-sound ablation table bug in STAGE_B_REPORT.md, loss-ratio denominator convention
@@ -21,7 +21,7 @@
 
 - **Method**: Independent analysis of sensor-audio alignment using RMS envelope, log envelope, and spectral centroid features
 - **Best Feature Pair**: Sensor level and RMS envelope
-- **Results**: All 4 sounds show consistent alignment with median lags near zero
+- **Results**: cross-correlation lags cluster at ≈ +0.4 s across sounds (04_modularPercussions inconclusive at 15% aligned frames)
 
 ## 2. Model
 
@@ -87,7 +87,7 @@
 
 ### Reproducibility
 
-- **Verification Story**: Independent re-render reproduced all metrics within ≤1.01%
+- **Verification Story**: An independent re-render of the original Stage B checkpoint reproduced the stored metrics within ≤1.01% at entry level; the artifacts were later regenerated in the main tree (re-run checkpoint), and aggregate means match the original report exactly.
 
 ## 9. Pointers to Track B
 
