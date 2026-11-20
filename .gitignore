@@ -9,3 +9,13 @@ runs/
 out.wav
 generated.wav
 my_drive_cycle.csv
+
+# bake-off / PoC generated data (large, reproducible)
+bakeoff_data/
+bakeoff_data_aligned/
+__pycache__/
+*.wav
+*.aiff
+*.npy
+*.pth
+!docs/**
