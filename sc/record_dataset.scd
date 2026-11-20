@@ -342,5 +342,4 @@ File.mkdir(folder +/+ "proximity_curves");
 		};
 		cleanup.value;
 	};
-};
 )
