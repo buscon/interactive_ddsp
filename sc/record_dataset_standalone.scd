@@ -15,10 +15,8 @@ Configuration:
     Edit the `settings` block below to customize the recording.
 */
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
+// Wrap everything in a function to ensure it executes
+{
 var sentireFolder = Platform.userHomeDir +/+ "sentire";
 var settings = (
     // [name used in the file names, key of the sound environment]
@@ -351,3 +349,6 @@ if (sentire.isNil) {
         cleanup.value;
     };
 };
+
+// Execute the function
+}.value;
