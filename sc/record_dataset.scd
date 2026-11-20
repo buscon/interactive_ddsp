@@ -341,6 +341,6 @@ File.mkdir(folder +/+ "proximity_curves");
 			"Dataset: aborted because of the error above".error;
 		};
 		cleanup.value;
-		~recordingDone = true;  // signal completion for run_both.scd driver
 	};
 };
+)
