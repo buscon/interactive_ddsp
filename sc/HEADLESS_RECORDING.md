@@ -9,48 +9,46 @@ This guide explains how to run the dataset recording script without the GUI.
 
 ---
 
-## Option 1: Load Both Scripts from SuperCollider (Recommended)
+## Option 1: Use the Auto-Executing Wrapper (Recommended)
 
-### Step 1: Boot Sentire Headless
-In SuperCollider, run:
-```supercollider
-// Load Sentire in headless mode
-"~/sentire/main-headless.scd".resolvePath.load;
+The wrapper script automatically detects when Sentire is ready and starts recording:
 
-// Wait a moment for it to initialize
-0.5.wait;
-
-// Verify it's running
-g.postStatus;  // should show server status
-g.controller.postcs;  // should show the controller object
+### From Command Line
+```bash
+# Load both scripts together (Sentire must be first)
+pw-jack sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset_headless.scd"
 ```
 
-### Step 2: Load the Recording Script
-Once Sentire is booted:
+### From SuperCollider IDE
 ```supercollider
-// Load the recording script
-"~/interactive_ddsp/sc/record_dataset.scd".resolvePath.load;
+// Just load the wrapper - it handles everything
+"~/interactive_ddsp/sc/record_dataset_headless.scd".load;
 ```
 
-The script will automatically start recording.
+The wrapper will:
+1. Check if Sentire is already running
+2. If not, load `main-headless.scd`
+3. Wait for initialization
+4. Automatically start the recording script
 
 ---
 
-## Option 2: Use the Wrapper Script
+## Option 2: Manual Two-Step Loading
 
-The wrapper script `record_dataset_headless.scd` loads both automatically:
+If you prefer more control, load Sentire and the recording script separately:
 
 ```supercollider
-// In SuperCollider:
-"~/interactive_ddsp/sc/record_dataset_headless.scd".resolvePath.load;
+// Step 1: Load Sentire headless
+"~/sentire/main-headless.scd".load;
+
+// Wait for it to initialize (watch the post window)
+// When you see "Sentire boot complete" or similar, continue:
+
+// Step 2: Load the recording script
+"~/interactive_ddsp/sc/record_dataset_headless.scd".load;
+// OR directly:
+"~/interactive_ddsp/sc/record_dataset.scd".load;
 ```
-
-This will:
-1. Load Sentire headless
-2. Wait for initialization
-3. Start the recording script
-
-**Note:** Adjust the `sentireFolder` path in the script if your Sentire installation is elsewhere.
 
 ---
 
@@ -64,7 +62,8 @@ cd ~/interactive_ddsp/sc
 
 ### Manual sclang Command
 ```bash
-sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset.scd"
+# Load both together (order matters - Sentire first!)
+pw-jack sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset_headless.scd"
 ```
 
 ---
