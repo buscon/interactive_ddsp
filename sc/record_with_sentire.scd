@@ -27,7 +27,7 @@ recordingScriptPath = thisProcess.nowExecutingPath.dirname +/+ "record_dataset.s
 "========================================".postln;
 "Dataset Recording with Sentire".postln;
 "========================================".postln;
-postln;
+"".postln;
 
 // Check if Sentire exists
 if (File.exists(mainHeadlessPath).not) {
@@ -38,13 +38,14 @@ if (File.exists(mainHeadlessPath).not) {
 
 "Step 1: Loading Sentire headless...".postln;
 "From: %".format(mainHeadlessPath).postln;
-postln;
+"".postln;
 
 // Load Sentire headless
 mainHeadlessPath.load;
 
 // Wait for Sentire to initialize, then run recording
 "Step 2: Waiting for Sentire to initialize (3 seconds)...".postln;
+"".postln;
 
 AppClock.sched(3.0, {
     // Check if Sentire is ready
@@ -59,26 +60,27 @@ AppClock.sched(3.0, {
     };
     
     "Sentire is ready!".postln;
-    postln;
+    "".postln;
     
     "Step 3: Loading dataset recording script...".postln;
     "From: %".format(recordingScriptPath).postln;
-    postln;
+    "".postln;
     
     // Load the recording script
     recordingScriptPath.load;
     
     "Recording script loaded. Check output above for recording progress.".postln;
-    postln;
+    "".postln;
     
     nil
 });
 
 // Keep sclang running so AppClock can execute
 "Keeping sclang running...".postln;
+"".postln;
 thisThread.clock.play;
 
-postln;
+"".postln;
 "----------------------------------------".postln;
 "Script loaded. Waiting for Sentire...".postln;
 "Watch the output for recording progress.".postln;
