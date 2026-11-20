@@ -63,13 +63,14 @@ var sentire, server, originalSoundKey;
 var processing, ctl;
 var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeManifest, writeInfo;
 var folder, eventRows = List[], manifestRows = List[], buffers = List[], recorder = nil, running = false;
+var mainHeadlessPath;
 
 // Check if Sentire is already running
 if (g.isNil or: { g.controller.isNil }) {
     "record_dataset_standalone: Sentire not running. Booting headless...".postln;
     
     // Load Sentire headless
-    var mainHeadlessPath = sentireFolder +/+ "main-headless.scd";
+    mainHeadlessPath = sentireFolder +/+ "main-headless.scd";
     if (File.exists(mainHeadlessPath).not) {
         "record_dataset_standalone: ERROR - Sentire not found at %".format(mainHeadlessPath).error;
         "record_dataset_standalone: Please adjust sentireFolder path or load Sentire manually.".error;
