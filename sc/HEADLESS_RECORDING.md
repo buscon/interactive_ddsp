@@ -1,156 +1,66 @@
 # Headless Dataset Recording
 
-This guide explains how to run the dataset recording script without the GUI.
+## Quick Start (Recommended)
 
-## Prerequisites
+### Option 1: Use the Standalone Script
 
-- Sentire installed at `~/sentire` (or adjust paths accordingly)
-- SuperCollider installed
+The standalone script auto-loads Sentire and starts recording automatically:
 
----
-
-## Option 1: Use the Auto-Executing Wrapper (Recommended)
-
-The wrapper script automatically detects when Sentire is ready and starts recording:
-
-### From Command Line
-```bash
-# Load both scripts together (Sentire must be first!)
-pw-jack sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset_headless.scd"
-```
-
-**Important:** Use `-scdefs` and list Sentire first. This keeps sclang running.
-
-### Alternative Command (if the above doesn't work)
-```bash
-# The wrapper will boot a server and keep running
-pw-jack sclang ~/interactive_ddsp/sc/record_dataset_headless.scd
-```
-
-### From SuperCollider IDE
-```supercollider
-// Just load the wrapper - it handles everything
-"~/interactive_ddsp/sc/record_dataset_headless.scd".load;
-```
-
-The wrapper will:
-1. Check if Sentire is already running
-2. If not, load `main-headless.scd`
-3. Wait for initialization (polls every 1 second)
-4. Automatically start the recording script
-
----
-
-## Option 2: Manual Two-Step Loading
-
-If you prefer more control, load Sentire and the recording script separately:
-
-```supercollider
-// Step 1: Load Sentire headless
-"~/sentire/main-headless.scd".load;
-
-// Wait for it to initialize (watch the post window)
-// When you see "Sentire boot complete" or similar, continue:
-
-// Step 2: Load the recording script
-"~/interactive_ddsp/sc/record_dataset_headless.scd".load;
-// OR directly:
-"~/interactive_ddsp/sc/record_dataset.scd".load;
-```
-
----
-
-## Option 3: Command Line with sclang
-
-### Using the Shell Script
 ```bash
 cd ~/interactive_ddsp/sc
-./run_recording_headless.sh ~/sentire
+./run_headless.sh
 ```
 
-### Manual sclang Command
+Or directly:
 ```bash
-# Load both together (order matters - Sentire first!)
-pw-jack sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset_headless.scd"
+pw-jack sclang ~/interactive_ddsp/sc/record_dataset_standalone.scd
 ```
+
+**What it does:**
+1. Boots a JACK server
+2. Loads Sentire headless (if not already running)
+3. Waits for initialization
+4. Starts recording automatically
 
 ---
 
-## Option 4: Modify main-headless.scd to Auto-Run
+### Option 2: From SuperCollider IDE
 
-Add this to the end of `~/sentire/main-headless.scd`:
+If you prefer the IDE:
 
 ```supercollider
-// Auto-run dataset recording after Sentire boots
-AppClock.sched(2.0, {
-    "Auto-loading dataset recording script...".postln;
-    "~/interactive_ddsp/sc/record_dataset.scd".resolvePath.load;
-    nil
-});
-```
+// Step 1: Boot Sentire headless
+"~/sentire/main-headless.scd".resolvePath.load;
 
-Then just run:
-```bash
-sclang -scdefs "~/sentire/main-headless.scd"
+// Wait for initialization (watch post window)
+
+// Step 2: Load the recording script
+"~/interactive_ddsp/sc/record_dataset.scd".resolvePath.load;
 ```
 
 ---
 
-## Monitoring Progress
+## Configuration
 
-The script outputs status messages to the SuperCollider post window:
-
-```
-Dataset: 20 proximity curves x 5 sounds = 100 files, about 115 min
-Dataset: recording 01_canopy_proximity_curve_001
-  66.0 s, peak -12.3 dBFS  (01_canopy_proximity_curve_001_master.aiff)
-Dataset: recording 01_canopy_proximity_curve_002
-...
-```
-
----
-
-## Stopping Early
-
-To stop the recording before it completes:
+Edit the `settings` block at the top of `record_dataset_standalone.scd`:
 
 ```supercollider
-// In SuperCollider:
-~stopRecordingSeries.value;
+var settings = (
+    sounds: [
+        ["01_canopy", \whisperingCanopy],
+        // ... add your sounds here
+    ],
+    
+    nProximityCurves: 20,    // number of unique sensor curves
+    proximityCurveDur: 60,   // duration in seconds
+    // ... more settings
+);
 ```
 
-This will:
-- Stop the current recording
-- Save all files recorded so far
-- Restore the original sound environment
-- Free all buffers
+### Quick Test Configuration
 
----
+For a quick test (2 curves, 10 seconds, 1 sound):
 
-## Resuming an Interrupted Run
-
-The script supports resuming. Set the `folder` setting to the existing folder:
-
-```supercollider
-// In record_dataset.scd, change:
-folder: "/path/to/existing/Dataset_20261120_143022",
-skipExisting: true,  // already set to true by default
-```
-
-Files that already exist will be skipped.
-
----
-
-## Troubleshooting
-
-### "g not found" or "g.controller not found"
-Sentire isn't booted. Load `main-headless.scd` first and wait for initialization.
-
-### "Sound environment not loaded"
-Make sure all the sound environments listed in the `sounds` array are loaded in Sentire.
-
-### Files are silent
-Check that the sound environments are actually producing audio. Test with a short run first:
 ```supercollider
 nProximityCurves: 2,
 proximityCurveDur: 10,
@@ -159,8 +69,108 @@ sounds: [["01_canopy", \whisperingCanopy]],
 
 ---
 
-## Files Created
+## Stopping Early
 
-- `sc/record_dataset_headless.scd` - Wrapper script for headless mode
-- `sc/run_recording_headless.sh` - Shell script for command-line usage
-- `sc/HEADLESS_RECORDING.md` - This documentation
+To stop the recording before it completes:
+
+**From SuperCollider IDE:**
+```supercollider
+~stopRecordingSeries.value;
+```
+
+**From command line:**
+Press `Ctrl+C`
+
+---
+
+## Resuming an Interrupted Run
+
+The script supports resuming. Set the `folder` setting to the existing folder:
+
+```supercollider
+folder: "/path/to/existing/Dataset_20261120_143022",
+skipExisting: true,  // already true by default
+```
+
+Files that already exist will be skipped.
+
+---
+
+## Output
+
+Files are created in:
+```
+~/sentire/Recordings/Dataset_YYYYMMDD_HHMMSS/
+├── proximity_curves/
+│   ├── proximity_curve_001.csv
+│   ├── proximity_curve_002.csv
+│   └── ...
+├── 01_canopy_proximity_curve_001_master.aiff
+├── 01_canopy_proximity_curve_002_master.aiff
+├── ...
+├── manifest.csv
+├── events.csv
+└── dataset_info.txt
+```
+
+---
+
+## Troubleshooting
+
+### "Sentire not found"
+Make sure Sentire is installed at `~/sentire`. If it's elsewhere, edit the `sentireFolder` variable at the top of the script.
+
+### "Sound environment not loaded"
+Make sure all sound environments listed in the `sounds` array are loaded in your Sentire installation.
+
+### Files are silent
+Test with a short run first to verify audio is being produced:
+```supercollider
+nProximityCurves: 2,
+proximityCurveDur: 10,
+sounds: [["01_canopy", \whisperingCanopy]],
+```
+
+### sclang exits immediately
+Use the standalone script (`record_dataset_standalone.scd`), not `record_dataset.scd`. The standalone version keeps sclang running.
+
+---
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `record_dataset_standalone.scd` | **Use this** - Self-contained, auto-boots Sentire |
+| `record_dataset.scd` | For IDE use (requires Sentire already loaded) |
+| `record_dataset_headless.scd` | Legacy wrapper (not recommended) |
+| `run_headless.sh` | Shell script wrapper for standalone |
+| `HEADLESS_RECORDING.md` | This documentation |
+
+---
+
+## Technical Notes
+
+### Why a Standalone Script?
+
+The regular `record_dataset.scd` is wrapped in parentheses `( )` which means it must be **evaluated** in the IDE, not just loaded.
+
+The standalone version:
+- Is executable from command line
+- Auto-boots Sentire if needed
+- Keeps sclang running via `thisThread.clock.play`
+- Contains all the recording logic inline
+
+### How It Works
+
+1. Script loads and checks if Sentire is running
+2. If not, loads `main-headless.scd` and waits 3 seconds
+3. Uses `AppClock.sched` to continue after Sentire initializes
+4. Calls `thisThread.clock.play` to keep sclang alive
+5. Executes the full recording script
+
+---
+
+## See Also
+
+- `SENSOR_SONIFICATION_PLAN.md` - Full project plan
+- `sc/record_dataset.scd` - Original recording script (IDE only)
