@@ -76,9 +76,10 @@ class AlignedChunkDataset(Dataset):
         if curves is not None:
             self.files = [f for f in self.files if f["curve"] in curves]
         
-        # Build sound_id mapping
+        # Build sound_id mapping using the integer IDs from index.json
+        # self.index["sound_ids"] is a dict {"sound_name": sound_id_int, ...}
         self.sound_ids = self.index["sound_ids"]
-        self.sound_id_map = {s: i for i, s in enumerate(self.sound_ids.keys())}
+        self.sound_id_map = self.sound_ids.copy()  # Copy dict with correct integer IDs
         
         # Load all selected files into RAM
         self._load_files()

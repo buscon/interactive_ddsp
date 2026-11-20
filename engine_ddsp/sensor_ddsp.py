@@ -88,11 +88,16 @@ class SensorDDSP(nn.Module):
         self.noise_head = nn.Linear(hidden_size, n_bands)
         self.f0_head = nn.Linear(hidden_size, 1)
         
+        # Reverb: use length=sampling_rate (1 second) like original EngineDDSP
+        # The original used Reverb(sampling_rate, sampling_rate) which sets length=48000
+        self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate)
+        
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
         
-        # Reverb (using correct signature: Reverb(length, sampling_rate))
-        self.reverb = Reverb(length=sampling_rate // 10, sampling_rate=sampling_rate)
+        # Reverb: use length=sampling_rate (1 second) like original EngineDDSP
+        # The original used Reverb(sampling_rate, sampling_rate) which sets length=48000
+        self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate)
     
     def forward(self, sensor, touch, sound_id):
         """
@@ -161,6 +166,10 @@ class SensorDDSP(nn.Module):
         
         # Filtered noise
         # noise_param has shape (B, T, n_bands) - one per frame
+        # Apply scale function like original EngineDDSP: scale_function(noise_param - 5)
+        # This ensures small initial amplitudes (shifts mean to ~0 before scaling)
+        noise_param = scale_function(noise_param - 5)
+        
         # Create impulse responses for each frame
         impulse = amp_to_impulse_response(noise_param, self.block_size)  # (B, T, block_size)
         

@@ -49,10 +49,41 @@ def test_dataset_alignment():
     return True
 
 
+def test_sound_id_values():
+    """Test that sound_id values match index.json integer IDs."""
+    print("\n" + "=" * 60)
+    print("TEST 2: Sound ID values from index.json")
+    print("=" * 60)
+    
+    root = "/home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned"
+    dataset = AlignedChunkDataset(root, "train", chunk_s=10.0, sounds=None, curves=None, seed=42)
+    
+    with open(os.path.join(root, "index.json")) as f:
+        index = json.load(f)
+    
+    # Test all sounds
+    all_sounds = list(index["sound_ids"].keys())
+    sounds_ok = True
+    
+    for sound in all_sounds:
+        item_full = dataset.full(sound, dataset.loaded[0]["curve"])  # Get any curve for this sound
+        expected_id = index["sound_ids"][sound]
+        
+        if item_full["sound_id"] != expected_id:
+            print(f"FAILED: sound={sound}, sound_id={item_full['sound_id']}, expected={expected_id}")
+            sounds_ok = False
+    
+    if sounds_ok:
+        print(f"All sound IDs match index.json: PASSED")
+        return True
+    else:
+        return False
+
+
 def test_provenance_guard():
     """Test that tampering with index.json raises an error."""
     print("\n" + "=" * 60)
-    print("TEST 2: Provenance guard")
+    print("TEST 3: Provenance guard")
     print("=" * 60)
     
     root = "/home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned"
@@ -375,6 +406,9 @@ def main():
     
     # Test dataset alignment
     results.append(("Dataset alignment", test_dataset_alignment()))
+    
+    # Test sound_id values
+    results.append(("Sound ID values", test_sound_id_values()))
     
     # Test provenance guard
     results.append(("Provenance guard", test_provenance_guard()))
