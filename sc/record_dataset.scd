@@ -344,4 +344,3 @@ File.mkdir(folder +/+ "proximity_curves");
 		~recordingDone = true;  // signal completion for run_both.scd driver
 	};
 };
-)
