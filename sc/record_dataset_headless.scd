@@ -72,3 +72,12 @@ if (g.isNil or: { g.controller.isNil }) {
 };
 
 "record_dataset_headless: Initialization started. Check post window for progress.".postln;
+
+// Keep sclang running so AppClock events can execute
+// Boot a server if none exists (needed when not using -scdefs)
+if (Server.default.isRunning.not) {
+    "record_dataset_headless: Booting default server to keep sclang running...".postln;
+    Server.default.boot;
+};
+
+"record_dataset_headless: Server running. Waiting for Sentire...".postln;
