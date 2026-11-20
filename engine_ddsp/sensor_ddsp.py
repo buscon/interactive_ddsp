@@ -37,7 +37,8 @@ class SensorDDSP(nn.Module):
     
     def __init__(self, f0_base_hz, n_sounds=5, hidden_size=512,
                  n_harmonic=100, n_bands=65, sampling_rate=48000,
-                 block_size=480, sound_emb_dim=16, max_f0_octaves=1.0):
+                 block_size=480, sound_emb_dim=16, max_f0_octaves=1.0,
+                 tilt_init=True):
         """
         Args:
             f0_base_hz: list of base f0 per sound ID (len = n_sounds)
@@ -49,6 +50,7 @@ class SensorDDSP(nn.Module):
             block_size: audio samples per frame
             sound_emb_dim: sound embedding dimension
             max_f0_octaves: max f0 deviation in octaves (tanh output * this)
+            tilt_init: if True, apply tilt initialization to heads
         """
         super().__init__()
         
@@ -60,6 +62,7 @@ class SensorDDSP(nn.Module):
         self.block_size = block_size
         self.sound_emb_dim = sound_emb_dim
         self.max_f0_octaves = max_f0_octaves
+        self.tilt_init = tilt_init
         
         # Register f0_base as buffer (per sound)
         self.register_buffer(
@@ -91,12 +94,33 @@ class SensorDDSP(nn.Module):
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
         
+        # Apply tilt initialization if requested
+        if tilt_init:
+            self._tilt_init()
+        
         # Reverb: 1 s impulse response as in the original EngineDDSP. initial_wet=-5
         # (sigmoid ~ 0.007) starts almost dry: the original default (wet=0 -> 0.5)
         # amplifies the untrained output ~25x (measured RMS 0.84 vs 0.034 dry,
         # target RMS ~0.06). The wet level is still learned.
         self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate,
                              initial_wet=-5)
+    
+    def _tilt_init(self):
+        """Apply tilt initialization to heads."""
+        # Multiply harmonic_head and noise_head weights by 0.1
+        self.harmonic_head.weight.data.mul_(0.1)
+        self.noise_head.weight.data.mul_(0.1)
+        
+        # harmonic_head bias: [-0.98, then -0.05*h for h in 0..n_harmonic-1]
+        nh = self.n_harmonic
+        b = torch.zeros(nh + 1)
+        b[0] = -0.98
+        b[1:] = -0.05 * torch.arange(nh).float()
+        self.harmonic_head.bias.data.copy_(b)
+        
+        # noise_head bias: 2.0 - 0.15*k for k in 0..n_bands-1
+        nb = self.n_bands
+        self.noise_head.bias.data.copy_(2.0 - 0.15 * torch.arange(nb).float())
     
     def forward(self, sensor, touch, sound_id):
         """
@@ -188,9 +212,22 @@ class SensorDDSP(nn.Module):
         
         return signal  # (B, T*block_size, 1)
 
+    @staticmethod
+    def frame_log_rms(x):
+        """Compute log RMS over each 480-sample frame: log(RMS + 1e-4)."""
+        # x: (B, L) or (B, L, 1)
+        if x.dim() == 3:
+            x = x.squeeze(-1)
+        # Reshape to (B, n_frames, 480)
+        B, L = x.shape
+        n_frames = L // 480
+        x_frames = x[:, :n_frames * 480].reshape(B, n_frames, 480)
+        rms = x_frames.pow(2).mean(-1).sqrt()  # (B, n_frames)
+        return torch.log(rms + 1e-4)
+
     def loss_fn(self, pred, target, scales, overlap):
         """
-        Multiscale spectral loss.
+        Multiscale spectral loss (comparable reporting loss).
         
         Args:
             pred: (B, L) predicted audio
@@ -212,6 +249,51 @@ class SensorDDSP(nn.Module):
         
         return loss
 
+    def loss_curriculum(self, pred, target, scales, overlap, step, ramp0=150, ramp1=400):
+        """
+        Curriculum loss with linear weight on spectral loss and RMS envelope loss.
+        
+        Args:
+            pred: (B, L) predicted audio
+            target: (B, L) target audio
+            scales: list of STFT window sizes
+            overlap: overlap factor for STFT
+            step: current training step
+            ramp0: start of ramp for log spectral loss weight
+            ramp1: end of ramp for log spectral loss weight
+        
+        Returns:
+            scalar loss
+        """
+        # Linear part of loss (weighted 100x)
+        pred_stft = multiscale_fft(pred, scales, overlap)
+        target_stft = multiscale_fft(target, scales, overlap)
+        
+        lin_loss = 0.0
+        lg_loss = 0.0
+        for p_s, t_s in zip(pred_stft, target_stft):
+            lin_loss = lin_loss + (p_s - t_s).abs().mean()
+            lg_loss = lg_loss + (safe_log(p_s + 1e-5) - safe_log(t_s + 1e-5)).abs().mean()
+        
+        # Weight for log spectral loss (ramps from 0 to 1)
+        w = min(1.0, max(0.0, (step - ramp0) / (ramp1 - ramp0)))
+        
+        # RMS envelope loss
+        pred_log_rms = self.frame_log_rms(pred)
+        target_log_rms = self.frame_log_rms(target)
+        rms_loss = (pred_log_rms - target_log_rms).abs().mean()
+        
+        return 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
+
+    def silence_loss(self, target, scales, overlap):
+        """
+        Compute the loss when pred is silence (zeros).
+        Used as baseline for comparing model performance.
+        """
+        B, L = target.shape
+        zeros = torch.zeros(B, L, dtype=target.dtype, device=target.device)
+        return self.loss_fn(zeros, target, scales, overlap)
+
 
 if __name__ == "__main__":
     # Quick test
@@ -230,3 +312,8 @@ if __name__ == "__main__":
         print(f"Output range: {output.min().item():.4f} to {output.max().item():.4f}")
         print(f"Has NaN: {torch.isnan(output).any().item()}")
         print(f"Has Inf: {torch.isinf(output).any().item()}")
+        
+        # Test tilt init
+        model_tilt = SensorDDSP(f0_base, tilt_init=True)
+        print(f"Tilt init harmonic_head weight range: {model_tilt.harmonic_head.weight.min().item():.6f} to {model_tilt.harmonic_head.weight.max().item():.6f}")
+        print(f"Tilt init harmonic_head bias: {model_tilt.harmonic_head.bias[:5].tolist()}")
