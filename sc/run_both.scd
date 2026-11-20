@@ -112,6 +112,16 @@ Routine {
     
     "Recording started.".postln;
     "".postln;
+    
+    // Give it a moment to actually start running
+    2.wait;
+    
+    // Verify it's actually running (state 1 = running)
+    if (~recordingSeries.state != 1) {
+        "ERROR: Recording routine exited immediately (state: %)".format(~recordingSeries.state).error;
+        "Check record_dataset.scd for errors.".error;
+        1.exit; 3600.wait;
+    };
 
     // ========================================================================
     // 4. Wait for Recording to Complete
@@ -123,7 +133,7 @@ Routine {
     "".postln;
     
     // Wait for the recording routine to finish (state 0 = not running)
-    while { ~recordingSeries.notNil and: { ~recordingSeries.state != 0 } } { 
+    while { ~recordingSeries.notNil and: { ~recordingSeries.state == 1 } } { 
         5.wait  // Check every 5 seconds
     };
     
