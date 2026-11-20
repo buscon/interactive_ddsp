@@ -91,7 +91,6 @@ Routine {
     "".postln;
     
     ~recordingSeries = nil;  // Clear any previous recording routine
-    ~recordingDone = nil;    // Will be set to true by record_dataset.scd when finished
     recPath.load;
 
     // ========================================================================
@@ -123,8 +122,8 @@ Routine {
     "This may take several hours depending on your settings.".postln;
     "".postln;
     
-    // Wait for the completion flag (set by record_dataset.scd)
-    while { ~recordingDone.isNil } { 
+    // Wait for the recording routine to finish (check if it's still running)
+    while { ~recordingSeries.isRunning } { 
         5.wait  // Check every 5 seconds
     };
     
