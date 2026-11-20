@@ -266,7 +266,7 @@ if (sentire.isNil) {
 						var base = "%_%".format(soundName, traj[\name]);
 						var path = folder +/+ base ++ ".aiff";
 						var firstFile = folder +/+ "%_%.aiff".format(base, nodes.keys.asArray.first);
-						var waited = 0, prepared = false, t0, trajStart;
+						var waited = 0, prepared = false, t0, proximity_curveStart;
 						var event = { arg label;
 							eventRows.add([soundName, traj[\name], base, label, (SystemClock.seconds - t0).round(0.001)]);
 						};
@@ -306,7 +306,7 @@ if (sentire.isNil) {
 							ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
 
 							manifestRows.add([soundName, traj[\name], base,
-								"proximity_curves/" ++ traj[\name] ++ ".csv", traj[\dur]]);
+								"proximity_curves/" ++ traj[\name] ++ ".csv", proximity_curveStart, traj[\dur]]);
 
 							// report what ended up on disk
 							nodes.keys.do { arg nodeName;
