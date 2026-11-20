@@ -23,6 +23,27 @@ from engine_ddsp.sensor_ddsp import SensorDDSP
 from engine_ddsp.synth import multiscale_fft, safe_log
 
 
+def compute_touch_from_sensor(sensor, threshold=0.98):
+    """
+    Compute touch_time from sensor values.
+    Rule: run length in seconds of consecutive frames with sensor >= threshold (0 when below).
+    This matches the dataset's touch_time computation.
+    """
+    # Find consecutive runs where sensor >= threshold
+    touch_time = np.zeros_like(sensor)
+    run_start = 0
+    
+    for i in range(len(sensor)):
+        if sensor[i] >= threshold:
+            # Continue the run
+            touch_time[run_start:i+1] = (i - run_start + 1) / 100.0  # Convert frames to seconds
+        else:
+            # Reset run
+            run_start = i + 1
+    
+    return touch_time
+
+
 def build_synthetic_reverb(sampling_rate=48000, duration_s=1.8, pre_delay_ms=20, seed=42):
     """
     Build a synthetic reverb impulse response.
@@ -146,6 +167,7 @@ def main():
     p.add_argument("--out", required=True, help="Output renders directory")
     p.add_argument("--sounds", nargs="+", default=None, help="Sound names to render (default: all)")
     p.add_argument("--curves", nargs="+", default=["017", "018", "019", "020"], help="Curve IDs to render")
+    p.add_argument("--split", default="val", choices=["train", "val"], help="Dataset split (train or val)")
     p.add_argument("--overfit_file", action="store_true", help="Render overfit file (03_harmonicSwarm_001)")
     args = p.parse_args()
 
@@ -213,8 +235,8 @@ def main():
     # Dataset for loading full files
     root = run_config["data"]["root"]
     full_dataset = AlignedChunkDataset(
-        root, split="val", chunk_s=chunk_s,
-        epoch_len=None, seed=0, train=False
+        root, split=args.split, chunk_s=chunk_s,
+        epoch_len=None, seed=0, train=False  # train=False for deterministic
     )
     
     for sound in sounds:
@@ -293,17 +315,24 @@ def main():
                 else:
                     raise
             
-            # Write dry files
+            # Write dry files with COMMON gain for loudness comparability
             pred_dry_path = os.path.join(args.out, f"{sound}_{curve}_pred.wav")
             target_dry_path = os.path.join(args.out, f"{sound}_{curve}_target.wav")
             
-            # Peak normalize
-            pred_norm = pred / (np.abs(pred).max() + 1e-8)
-            target_norm = audio / (np.abs(audio).max() + 1e-8)
+            # Compute peak for both
+            pred_peak = np.abs(pred).max()
+            target_peak = np.abs(audio).max()
+            # Common gain = 1 / max(peak_pred, peak_target)
+            common_gain = 1.0 / max(pred_peak, target_peak)
+            
+            # Apply common gain to both
+            pred_norm = pred * common_gain
+            target_norm = audio * common_gain
             
             sf.write(pred_dry_path, pred_norm, 48000, subtype='PCM_16')
             sf.write(target_dry_path, target_norm, 48000, subtype='PCM_16')
             print(f"    Dry files: {os.path.basename(pred_dry_path)}, {os.path.basename(target_dry_path)}")
+            print(f"    Common gain: {common_gain:.6f} (pred_peak={pred_peak:.4f}, target_peak={target_peak:.4f})")
             
             # Apply synthetic reverb (25% wet, 75% dry)
             pred_reverb = 0.75 * pred_norm + 0.25 * signal.convolve(pred_norm, ir, mode='same')
@@ -320,7 +349,7 @@ def main():
             sf.write(target_reverb_path, target_reverb, 48000, subtype='PCM_16')
             print(f"    Reverb files: {os.path.basename(pred_reverb_path)}, {os.path.basename(target_reverb_path)}")
             
-            # Compute metrics on dry pred vs target
+            # Compute metrics on dry pred vs target (on unnormalised audio)
             # Ensure same length first
             metrics = compute_metrics_with_same_len(pred, audio, scales, overlap, device)
             multiscale_loss, pred_rms, target_rms, pred_centroid, target_centroid = metrics
@@ -329,7 +358,7 @@ def main():
             rms_corr, _ = pearsonr(pred_rms, target_rms)
             centroid_corr, _ = pearsonr(pred_centroid, target_centroid)
             
-            # (d) RMS ratio
+            # (d) RMS ratio (on unnormalised audio)
             pred_rms_val = np.sqrt(np.mean(pred**2))
             target_rms_val = np.sqrt(np.mean(audio**2))
             rms_ratio = pred_rms_val / (target_rms_val + 1e-8)
@@ -360,9 +389,27 @@ def main():
             pred_rms_abl_zero = compute_rms_envelope(pred_abl_zero)
             rms_corr_abl_zero, _ = pearsonr(pred_rms_abl_zero, pred_rms)
             
-            # (ii) sensor circularly rolled, touch recomputed
+            # (ii) sensor circularly rolled, touch recomputed with dataset rule
+            # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
             sensor_rolled = np.roll(sensor, len(sensor) // 2)
-            touch_rolled = np.clip(sensor_rolled / 30.0, 0.0, 2.0)
+            touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=0.98)
+            touch_rolled = np.clip(touch_time_rolled / 30.0, 0.0, 2.0)
+            
+            # Verify against stored touch_time
+            stored_touch_time = item["touch_raw"]  # This is touch_time
+            diff = np.abs(touch_time_rolled - stored_touch_time).max()
+            if diff > 0.001:
+                print(f"    WARNING: Touch_time recomputation diff={diff:.6f} from stored")
+            else:
+                print(f"    Touch_time recomputation verified (max diff={diff:.6f})")
+            
+            # Also verify touch
+            stored_touch = item["touch"]
+            touch_diff = np.abs(touch_rolled - stored_touch).max()
+            if touch_diff > 0.001:
+                print(f"    WARNING: Touch recomputation diff={touch_diff:.6f} from stored")
+            else:
+                print(f"    Touch recomputation verified (max diff={touch_diff:.6f})")
             
             sensor_rolled_t = torch.from_numpy(sensor_rolled).unsqueeze(0).unsqueeze(-1).to(device)
             touch_rolled_t = torch.from_numpy(touch_rolled).unsqueeze(0).unsqueeze(-1).to(device)
@@ -448,11 +495,13 @@ def main():
         f.write("- Multiscale STFT loss computed on full file (or 10s windows if needed).\n")
         f.write("- RMS envelope: 480-sample frames, log-RMS.\n")
         f.write("- Spectral centroid: 2048-sample window, 480-sample hop.\n")
+        f.write("- Loudness comparability: pred and target share common gain (1/max(peak_pred, peak_target)).\n")
+        f.write("- Touch recompute rule: run length (s) of consecutive frames with sensor >= 0.98, then /30, clip [0,2].\n")
     
     print(f"\nResults written to: {args.out}")
     print(f"  - metrics.csv: Per-file metrics")
     print(f"  - metrics_summary.md: Summary tables")
-    print(f"\nDry files: pred vs target")
+    print(f"\nDry files: pred vs target (common gain applied)")
     print(f"Reverb files: synthetic IR (1.8s, 25% wet)")
 
 
