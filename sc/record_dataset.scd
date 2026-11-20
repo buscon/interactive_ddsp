@@ -50,7 +50,7 @@ Limits:
   - This script has not been run against a live Sentire setup yet; do a short test run
     first (nProximityCurves: 2, proximityCurveDur: 10, one sound).
 */
-(
+
 var settings = (
 	// [name used in the file names, key of the sound environment]
 	sounds: [
@@ -342,4 +342,3 @@ File.mkdir(folder +/+ "proximity_curves");
 		};
 		cleanup.value;
 	};
-)
