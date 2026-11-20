@@ -6,7 +6,7 @@
 - **Model**: SensorDDSP with sensor/touch MLPs, harmonic+noise synthesis, learnable reverb, curriculum loss, and tilted initialization
 - **Training**: 15 runs (13/15 passed core+ablation on training chunk), 2 silence collapses (01_canopy_1, 02_forestPad_2), band-shape corr recomputed on all 15 overfit checkpoints: 0.38–1.00 (median ≈ 0.95)
 - **Stage B**: 2000 steps, batch 8, 0 restarts, validation loss 7.34 vs silence 23.22; held-out evaluation shows loss_ratio < 0.6, RMS ratio 0.44–0.78, peak 0.20–0.49, ablation rolled-corr mean 0.065
-- **Sensor Conditioning**: Evidence suggests sensor conditioning works, but further investigation needed for Curve-018 anomaly
+- **Sensor Conditioning**: Evidence suggests sensor conditioning works, but resolved: roll-by-half artifact on quasi-periodic curve 018; shared protocol = roll-2000
 - **Caveats**: Centroid-envelope metric artifact, per-sound ablation table bug in STAGE_B_REPORT.md, loss-ratio denominator convention
 
 ## 1. Dataset & Alignment
@@ -69,30 +69,21 @@
 
 ### Sensor Conditioning Evidence
 
-- **Evidence**: Suggests sensor conditioning works, but further investigation needed for Curve-018 anomaly
+- **Evidence**: Suggests sensor conditioning works, but resolved: roll-by-half artifact on quasi-periodic curve 018; shared protocol = roll-2000
 
 ## 7. Curve-018 Ablation Anomaly
 
 ### Curve-018 Ablation Anomaly
 
-- **Diagnostic**: The ablation analysis for Curve-018 revealed significant deviations in sensor response patterns compared to other curves. The sensor conditioning appears to be functioning, but the anomaly suggests potential issues with the sensor-to-sound mapping for this specific curve.
+- **Per-curve mean rolled-corr**: 017 = -0.251, **018 = +0.609 (5/5 entries > 0.5, max +0.682)**, 019 = -0.015, 020 = -0.082; zero-ablation on 018 is normal (mean -0.177)
 
-- **Sensor Statistics**:
-  - Mean sensor response: 0.42
-  - Standard deviation: 0.18
-  - Peak response: 0.87
+- **Curve-018 sensor stats**: mean 0.551, std 0.331, 22.7% of frames pinned at 1.000, quasi-periodic with period ≈ 30–33 s ≈ T/2, autocorr at T/2 = +0.348 → roll-by-half is a partial identity (render corr tracks sensor autocorr at the roll lag: +0.35→+0.6, 30 s→+0.3, 10 s→-0.1, 20 s→-0.25)
 
-- **Ablation-Variant Comparison**:
-  - Harmonic ablation: 0.25 correlation
-  - Noise ablation: 0.32 correlation
-  - Reverb ablation: 0.18 correlation
+- **Variant comparison on 018 (mean over 5 seeds)**: roll_half +0.55…+0.68 (artifact), roll_1000 -0.14…-0.10, roll_2000 -0.29…-0.20, zero -0.48…-0.06, cross-curve swap +0.50…+0.72 (false pass, donors correlated +0.4…+0.6), touch_zero ≈ +1.00 (touch carries nothing), sensor_zero -0.53…-0.26 (sensor carries the envelope)
 
-- **Verdict**: The anomaly appears to be an artifact of the ablation process rather than a real weakness in the system. The sensor conditioning is working as expected, but the ablation metrics need refinement.
+- **Verdict: metric artifact, not a real weakness** — model is genuinely sensor-conditioned on 018; re-scored with roll-2000 it passes the < 0.5 gate (≈ -0.2)
 
-- **Recommended Shared Ablation Protocol**:
-  - Ablation type: Harmonic
-  - Seeds: 3
-  - Threshold: 0.5
+- **Recommended shared ablation protocol (DDSP + RAVE)**: primary = circular sensor roll by 2000 frames (20 s @100 Hz), touch recomputed with the dataset rule, per-file guard: if |autocorr(2000)| ≥ 0.2 take smallest lag ≥ 2000 with |ac| < 0.1; secondary = sensor=0 & touch=0; rejected = roll-by-T/2 and cross-curve swap unless donor |corr| < 0.1; ≥5 seeds per render, report mean ± std; pass threshold = mean ablation RMS-envelope corr < 0.5 per entry (optional max-over-seeds < 0.6). Observed over all 20 held-out entries with roll-2000: +0.13…-0.29.
 
 ## 8. Caveats & Reproducibility
 
