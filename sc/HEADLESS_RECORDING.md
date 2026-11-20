@@ -15,8 +15,16 @@ The wrapper script automatically detects when Sentire is ready and starts record
 
 ### From Command Line
 ```bash
-# Load both scripts together (Sentire must be first)
+# Load both scripts together (Sentire must be first!)
 pw-jack sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record_dataset_headless.scd"
+```
+
+**Important:** Use `-scdefs` and list Sentire first. This keeps sclang running.
+
+### Alternative Command (if the above doesn't work)
+```bash
+# The wrapper will boot a server and keep running
+pw-jack sclang ~/interactive_ddsp/sc/record_dataset_headless.scd
 ```
 
 ### From SuperCollider IDE
@@ -28,7 +36,7 @@ pw-jack sclang -scdefs "~/sentire/main-headless.scd,~/interactive_ddsp/sc/record
 The wrapper will:
 1. Check if Sentire is already running
 2. If not, load `main-headless.scd`
-3. Wait for initialization
+3. Wait for initialization (polls every 1 second)
 4. Automatically start the recording script
 
 ---
