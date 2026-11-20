@@ -334,12 +334,11 @@ def main():
             decay_over = 1000  # Don't decay during overfit
         
         opt = torch.optim.Adam(model.parameters(), lr=lr_start)
-    step = 0
-    timing_window = 25
-    start_time = None
-    step_count = 0
-    model = create_model(args, seed=seed)  # Already done via create_model
-        
+        step = 0
+        timing_window = 25
+        start_time = None
+        step_count = 0
+
         # Gradient clipping
         max_grad_norm = 5.0
 
@@ -478,14 +477,10 @@ def main():
                     
                     # Use sync for accurate CUDA timing
                     torch.cuda.synchronize()
-    elapsed = time.time() - start_time
-    steps_per_sec = timing_window / elapsed
-    print(f"Steps/sec: {steps_per_sec:.2f}")
-    start_time = time.time()
-                    
                     step_time = step_end_time - step_start_time
                     steps_sec = 25.0 / step_time if step_time > 0 else 0
-                    
+                    print(f"Steps/sec: {steps_sec:.2f}")
+
                     # Log to CSV
                     val_loss_str = f"{val_loss:.6f}" if val_loss is not None else ""
                     silence_loss_str = f"{silence_loss:.6f}" if silence_loss is not None else ""
@@ -541,12 +536,10 @@ def main():
             print(f"  Restarting training with seed {args.seed + restart_num + 1}")
             # Reset optimizer, step, and last_print_step before restarting
             opt = torch.optim.Adam(model.parameters(), lr=lr_start)
-    step = 0
-    timing_window = 25
-    start_time = None
-    step_count = 0
-    model = create_model(args, seed=seed)  # Already done via create_model
             step = 0
+            timing_window = 25
+            start_time = None
+            step_count = 0
             last_print_step = 0
             continue  # Restart
     
@@ -647,16 +640,51 @@ def main():
                 
                 # Peak
                 pred_peak = pred.abs().max().item()
-            
+
+                # Sensor ablation: zeroed and shuffled (rolled) sensor must change output
+                from scipy.stats import pearsonr
+                sensor_zero = torch.zeros_like(sensor_t)
+                pred_zero = model(sensor_zero, touch_t, sound_id_t).squeeze(0).squeeze(-1)
+                sensor_shuf = torch.roll(sensor_t.clone(), shifts=sensor_t.shape[1] // 2, dims=1)
+                pred_shuf = model(sensor_shuf, touch_t, sound_id_t).squeeze(0).squeeze(-1)
+
+                def _rms_envelope(x, frame_size=480, hop=480):
+                    x = x.detach().cpu().numpy().ravel()
+                    n = max((len(x) - frame_size) // hop + 1, 1)
+                    e = np.array([np.sqrt(np.mean(x[i*hop:i*hop+frame_size]**2) + 1e-8) for i in range(n)])
+                    return np.log(e + 1e-4)
+
+                rms_corr_zero, _ = pearsonr(_rms_envelope(pred.squeeze()), _rms_envelope(pred_zero))
+                rms_corr_shuf, _ = pearsonr(_rms_envelope(pred.squeeze()), _rms_envelope(pred_shuf))
+
+                # Spectral centroid envelope correlation (timbre check)
+                def _spectral_centroid(x, sr=48000, frame_size=2048, hop=480):
+                    x = np.asarray(x).ravel()
+                    n = max((len(x) - frame_size) // hop + 1, 1)
+                    win = np.hanning(frame_size)
+                    freqs = np.fft.rfftfreq(frame_size, 1 / sr)
+                    out = np.zeros(n)
+                    for i in range(n):
+                        spec = np.abs(np.fft.rfft(x[i*hop:i*hop+frame_size] * win))
+                        out[i] = np.sum(spec * freqs) / (np.sum(spec) + 1e-8)
+                    return out
+
+                centroid_corr, _ = pearsonr(_spectral_centroid(pred.squeeze().cpu().numpy()),
+                                            _spectral_centroid(audio_t.squeeze().cpu().numpy()))
+
             # Pass criteria:
             # (i) final_loss < 0.6 * silence_loss
             # (ii) rms_ratio in [0.4, 2.0]
             # (iii) pred_peak > 1e-3
+            # (iv) shuffled-sensor RMS envelope corr < 0.5 (model is sensor-conditioned)
+            # (v) spectral centroid corr > 0.6 (timbre matches)
             cond1 = final_loss < 0.6 * silence_loss
             cond2 = 0.4 <= rms_ratio <= 2.0
             cond3 = pred_peak > 1e-3
-            passed = cond1 and cond2 and cond3
-            
+            cond4 = bool(rms_corr_shuf < 0.5)
+            cond5 = bool(centroid_corr > 0.6)
+            passed = cond1 and cond2 and cond3 and cond4 and cond5
+
             print(f"\nOverfit test:")
             print(f"  Chunk offset: {offset} frames ({offset/100:.2f}s)")
             print(f"  Touch seconds in chunk: {touch_seconds:.2f}s")
@@ -664,11 +692,54 @@ def main():
             print(f"  Final loss: {final_loss:.6f}")
             print(f"  RMS ratio: {rms_ratio:.6f}")
             print(f"  Peak: {pred_peak:.6e}")
+            print(f"  RMS corr zeroed sensor: {rms_corr_zero:.4f}")
+            print(f"  RMS corr shuffled sensor: {rms_corr_shuf:.4f}")
+            print(f"  Spectral centroid corr: {centroid_corr:.4f}")
             print(f"  PASS criteria: final_loss < 0.6 * silence_loss = {silence_loss * 0.6:.6f}: {cond1}")
             print(f"               0.4 <= rms_ratio <= 2.0: {cond2}")
             print(f"               peak > 1e-3: {cond3}")
+            print(f"               shuffled-sensor corr < 0.5: {cond4}")
+            print(f"               centroid corr > 0.6: {cond5}")
             print(f"  Result: {'PASS' if passed else 'FAIL'}")
 
+            # Per-run results artefact
+            results = {
+                "run_name": args.name,
+                "sound": args.overfit_sound,
+                "curve": args.overfit_curve,
+                "seed": args.seed,
+                "steps": args.steps,
+                "silence_loss": silence_loss,
+                "final_loss": final_loss,
+                "rms_ratio": rms_ratio,
+                "pred_peak": pred_peak,
+                "rms_corr_zero": float(rms_corr_zero),
+                "rms_corr_shuffled": float(rms_corr_shuf),
+                "centroid_corr": float(centroid_corr),
+                "restarts": restart_num,
+                "passed": bool(passed),
+                "pass_criteria": {
+                    "loss": bool(cond1),
+                    "rms_ratio": bool(cond2),
+                    "peak": bool(cond3),
+                    "ablation": bool(cond4),
+                    "spectral": bool(cond5),
+                },
+            }
+            with open(os.path.join(run_dir, "results.json"), "w") as f:
+                json.dump(results, f, indent=2)
+
+            # Aggregate results table
+            global_results_path = os.path.join(args.root, "RESULTS.json")
+            global_results = []
+            if os.path.exists(global_results_path):
+                with open(global_results_path, "r") as f:
+                    global_results = json.load(f)
+            global_results.append(results)
+            tmp_path = global_results_path + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(global_results, f, indent=2)
+            os.replace(tmp_path, global_results_path)
 
 if __name__ == "__main__":
     main()
