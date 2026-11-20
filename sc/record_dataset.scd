@@ -86,12 +86,24 @@ var settings = (
 	touchRise: 0.1  // s, time the simulated signal needs to go from 0 to 1 (and back) for a touch
 );
 
-var sentire = g.controller;
-var server = Server.default;
-var originalSoundKey;
+var sentire, server, originalSoundKey;
 var processing, ctl;
 var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeManifest, writeInfo;
 var folder, eventRows = List[], manifestRows = List[], buffers = List[], recorder = nil, running = false;
+
+// Check if Sentire is booted
+if (g.isNil) {
+	"Dataset: g not found, boot Sentire first (main.scd or main-headless.scd)".error;
+	^this
+};
+
+sentire = g.controller;
+if (sentire.isNil) {
+	"Dataset: g.controller not found, boot Sentire first".error;
+	^this
+};
+
+server = Server.default;
 
 // the shared simulated signal: plays a buffer of sensor values at `rate` values per second,
 // started by t_go. After the end of the buffer the last value is held.
@@ -204,17 +216,14 @@ cleanup = {
 	cleanup.value;
 };
 
-if (sentire.isNil) {
-	"Dataset: g.controller not found, boot Sentire first".error;
-} {
-	if (~recordingSeries.notNil) { ~recordingSeries.stop };
-	running = true;
-	originalSoundKey = sentire.soundEnvironmentSelector.selected;
-	folder = settings[\folder] ?? {
-		g.config.sentireFolder +/+ "Recordings" +/+ "Dataset_" ++ Date.getDate.format("%Y%m%d_%H%M%S")
-	};
-	File.mkdir(folder);
-	File.mkdir(folder +/+ "trajectories");
+if (~recordingSeries.notNil) { ~recordingSeries.stop };
+running = true;
+originalSoundKey = sentire.soundEnvironmentSelector.selected;
+folder = settings[\folder] ?? {
+	g.config.sentireFolder +/+ "Recordings" +/+ "Dataset_" ++ Date.getDate.format("%Y%m%d_%H%M%S")
+};
+File.mkdir(folder);
+File.mkdir(folder +/+ "proximity_curves");
 
 	~recordingSeries = fork {
 		try {
