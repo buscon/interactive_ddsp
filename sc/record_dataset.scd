@@ -1,13 +1,13 @@
 /*
-Records the training dataset for interactive_ddsp: the SAME set of random sensor
-trajectories is replayed through several Sentire sound environments, and each
+Records the training dataset for interactive_ddsp: the SAME set of random proximity
+curves is replayed through several Sentire sound environments, and each
 replay is recorded.
 
 Why it is built this way (see SENSOR_SONIFICATION_PLAN.md, "Multi-Sound Replay"):
-  - Every sound gets exactly the same trajectories. The trajectory file name is the
-    key, so train/validation can be split by trajectory (no gesture in train with one
+  - Every sound gets exactly the same proximity curves. The proximity curve file name is the
+    key, so train/validation can be split by proximity curve (no gesture in train with one
     sound and in validation with another).
-  - A "trajectory" here is only the sensor value over time (0..1, one curve per
+  - A "proximity curve" here is only the sensor value over time (0..1, one curve per
     recording), not a spatial path. The curves are random but reproducible
     (settings[\seed]) and long (60 s). They mix holds, ramps of different speeds, and
     touches of short and long duration (value = 1), so the model sees many more
@@ -29,14 +29,14 @@ scaling stage, so the sensor input is ignored). When it is finished, or stopped,
 sensor signal and the sound environment that was selected before are restored.
 
 Output, in <sentire folder>/Recordings/Dataset_<date>/ (or `folder`):
-  trajectories/trajectory_001.csv ...   time_s,sensor   (sensor = 0..1 at controlRate)
-  <sound>_<trajectory>_<node>.aiff      audio (int16, as in NodeRecorder)
-  manifest.csv    one row per audio file: sound, trajectory, file base, trajectory file,
-                  trajectory_start_s (time of the trajectory start inside the audio file),
+  proximity_curves/proximity_curve_001.csv ...   time_s,sensor   (sensor = 0..1 at controlRate)
+  <sound>_<proximity_curve>_<node>.aiff      audio (int16, as in NodeRecorder)
+  manifest.csv    one row per audio file: sound, proximity_curve, file base, proximity_curve file,
+                  proximity_curve_start_s (time of the proximity curve start inside the audio file),
                   duration_s
-  events.csv      recording_start / trajectory_start / trajectory_end / recording_end
+  events.csv      recording_start / proximity_curve_start / proximity_curve_end / recording_end
                   times in seconds since the start of each file
-  dataset_info.txt  seed, rates, sounds, trajectory settings
+  dataset_info.txt  seed, rates, sounds, proximity_curve settings
 
 Limits:
   - There is ONE sensor channel: Sentire's single post-scaling signal, 0..1. The value
@@ -44,11 +44,11 @@ Limits:
     the sound changes with the seconds spent in touch. "Seconds in touch" is not in the
     csv; derive it from the sensor column (count while the value is >= 0.98) in
     preprocessing, and the same way live.
-  - trajectory_start_s is measured in the language, so it is accurate to a few ms, not
+  - proximity_curve_start_s is measured in the language, so it is accurate to a few ms, not
     to the sample. It is good enough for a 100 Hz control rate, but the sync check
     (issue "Record replay dataset with sync check") should confirm it.
   - This script has not been run against a live Sentire setup yet; do a short test run
-    first (nTrajectories: 2, trajectoryDur: 10, one sound).
+    first (nProximityCurves: 2, proximityCurveDur: 10, one sound).
 */
 (
 var settings = (
@@ -69,9 +69,9 @@ var settings = (
 	folder: nil,
 	skipExisting: true, // skip a file that already exists (for resuming in a given folder)
 
-	seed: 2026,           // same seed -> same trajectories
-	nTrajectories: 20,    // unique sensor curves. 20 x 60 s = 600 chunks of 2 s
-	trajectoryDur: 60,    // s, long enough to contain holds of 30 s and more
+	seed: 2026,           // same seed -> same proximity curves
+	nProximityCurves: 20,    // unique proximity curves. 20 x 60 s = 600 chunks of 2 s
+	proximityCurveDur: 60,    // s, long enough to contain holds of 30 s and more
 	// A touch is the signal reaching thresholdTouch (Sentire's value); the sound then changes
 	// with the seconds spent in touch. Random ramps stay at or below 0.95, so they never touch.
 	thresholdTouch: 0.98,
@@ -81,8 +81,8 @@ var settings = (
 	controlRate: 100,     // Hz, sensor values written to the csv. = sampling_rate / block_size
 
 	settle: 2,      // s, simulated signal is held at 0 before the recording starts
-	lead: 1,        // s, recorded before the trajectory starts
-	tail: 5,        // s, recorded after the trajectory ends (to capture the release of the sound)
+	lead: 1,        // s, recorded before the proximity curve starts
+	tail: 5,        // s, recorded after the proximity curve ends (to capture the release of the sound)
 	touchRise: 0.1  // s, time the simulated signal needs to go from 0 to 1 (and back) for a touch
 );
 
@@ -90,7 +90,7 @@ var sentire = g.controller;
 var server = Server.default;
 var originalSoundKey;
 var processing, ctl;
-var controlFunction, makeTrajectory, writeTrajectory, cleanup, peakOf, writeEvents, writeManifest, writeInfo;
+var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeManifest, writeInfo;
 var folder, eventRows = List[], manifestRows = List[], buffers = List[], recorder = nil, running = false;
 
 // the shared simulated signal: plays a buffer of sensor values at `rate` values per second,
@@ -103,9 +103,9 @@ controlFunction = {
 	K2A.ar(BufRd.kr(1, buf, pos, 0, 2));
 };
 
-// Random sensor trajectory in 0..1. Starts and ends at 0.
+// Random proximity curve in 0..1. Starts and ends at 0.
 // Segments: hold (stay), ramp (go to a random level at a random speed), touch (go to 1, hold, back to 0).
-makeTrajectory = { arg dur, rate, touchRise, holdShort, holdLong, pLong;
+makeProximityCurve = { arg dur, rate, touchRise, holdShort, holdLong, pLong;
 	var levels = List[0.0], times = List[], t = 0, env;
 	var add = { arg dt, level;
 		var step = dt.min(dur - 1 - t); // leave at least 1 s for the final ramp to 0
@@ -132,7 +132,7 @@ makeTrajectory = { arg dur, rate, touchRise, holdShort, holdLong, pLong;
 	FloatArray.fill((dur * rate).asInteger, { arg i; env.at(i / rate) });
 };
 
-writeTrajectory = { arg path, values, rate;
+writeProximityCurve = { arg path, values, rate;
 	File.use(path.standardizePath, "w", { arg file;
 		file.write("time_s,sensor\n");
 		values.do { arg v, i; file.write("%,%\n".format((i / rate).round(0.0001), v.round(0.0001))) };
@@ -153,14 +153,14 @@ peakOf = { arg path;
 
 writeEvents = {
 	File.use((folder +/+ "events.csv").standardizePath, "w", { arg file;
-		file.write("sound,trajectory,file,event,time_s\n");
+		file.write("sound,proximity_curve,file,event,time_s\n");
 		eventRows.do { arg row; file.write(row.join(",") ++ "\n") };
 	});
 };
 
 writeManifest = {
 	File.use((folder +/+ "manifest.csv").standardizePath, "w", { arg file;
-		file.write("sound,trajectory,file,trajectory_file,trajectory_start_s,duration_s\n");
+		file.write("sound,proximity_curve,file,proximity_curve_file,proximity_curve_start_s,duration_s\n");
 		manifestRows.do { arg row; file.write(row.join(",") ++ "\n") };
 	});
 };
@@ -169,7 +169,7 @@ writeInfo = {
 	File.use((folder +/+ "dataset_info.txt").standardizePath, "w", { arg file;
 		file.write("seed: %\n".format(settings[\seed]));
 		file.write("nTrajectories: %\n".format(settings[\nTrajectories]));
-		file.write("trajectoryDur_s: %\n".format(settings[\trajectoryDur]));
+		file.write("proximityCurveDur_s: %\n".format(settings[\proximityCurveDur]));
 		file.write("controlRate_Hz: %\n".format(settings[\controlRate]));
 		file.write("lead_s: %\n".format(settings[\lead]));
 		file.write("tail_s: %\n".format(settings[\tail]));
@@ -219,7 +219,7 @@ if (sentire.isNil) {
 	~recordingSeries = fork {
 		try {
 			var nodes = (), trajectories = List[], silentBuf, rate = settings[\controlRate];
-			var perFile = settings[\settle] + settings[\lead] + settings[\trajectoryDur] + settings[\tail] + 1;
+			var perFile = settings[\settle] + settings[\lead] + settings[\proximityCurveDur] + settings[\tail] + 1;
 
 			settings[\nodes].do { arg name;
 				nodes[name] = sentire.signalFlow.perform(name);
@@ -227,14 +227,14 @@ if (sentire.isNil) {
 
 			// generate all trajectories once; every sound replays the same ones
 			thisThread.randSeed = settings[\seed];
-			settings[\nTrajectories].do { arg i;
-				var name = "trajectory_%".format((i + 1).asString.padLeft(3, "0"));
-				var values = makeTrajectory.(settings[\trajectoryDur], rate, settings[\touchRise],
+			settings[\nProximityCurves].do { arg i;
+				var name = "proximity_curve_%".format((i + 1).asString.padLeft(3, "0"));
+				var values = makeProximityCurve.(settings[\proximityCurveDur], rate, settings[\touchRise],
 					settings[\touchHoldShort], settings[\touchHoldLong], settings[\pLongTouch]);
 				var buffer = Buffer.sendCollection(server, values, 1);
 				buffers.add(buffer);
-				writeTrajectory.(folder +/+ "trajectories" +/+ (name ++ ".csv"), values, rate);
-				trajectories.add((name: name, buffer: buffer, dur: settings[\trajectoryDur]));
+				writeProximityCurve.(folder +/+ "proximity_curves" +/+ (name ++ ".csv"), values, rate);
+				trajectories.add((name: name, buffer: buffer, dur: settings[\proximityCurveDur]));
 			};
 			silentBuf = Buffer.sendCollection(server, FloatArray[0, 0], 1);
 			buffers.add(silentBuf);
@@ -247,10 +247,10 @@ if (sentire.isNil) {
 			ctl = processing.customSignal.proxy;
 			ctl.set(\buf, silentBuf.bufnum, \rate, rate, \t_go, 1);
 
-			"Dataset: % trajectories x % sounds = % files, about % min".format(
-				settings[\nTrajectories], settings[\sounds].size,
-				settings[\nTrajectories] * settings[\sounds].size,
-				(settings[\nTrajectories] * settings[\sounds].size * perFile / 60).round(1)).postln;
+			"Dataset: % proximity curves x % sounds = % files, about % min".format(
+				settings[\nProximityCurves], settings[\sounds].size,
+				settings[\nProximityCurves] * settings[\sounds].size,
+				(settings[\nProximityCurves] * settings[\sounds].size * perFile / 60).round(1)).postln;
 
 			settings[\sounds].do { arg sound;
 				var soundName = sound[0], soundKey = sound[1];
@@ -290,12 +290,12 @@ if (sentire.isNil) {
 							event.("recording_start");
 							settings[\lead].wait;
 
-							// replay the trajectory
-							trajStart = (SystemClock.seconds - t0).round(0.001);
-							event.("trajectory_start");
+							// replay the proximity curve
+							proximity_curveStart = (SystemClock.seconds - t0).round(0.001);
+							event.("proximity_curve_start");
 							ctl.set(\buf, traj[\buffer].bufnum, \rate, rate, \t_go, 1);
 							traj[\dur].wait;
-							event.("trajectory_end");
+							event.("proximity_curve_end");
 
 							settings[\tail].wait;
 							event.("recording_end");
@@ -306,7 +306,7 @@ if (sentire.isNil) {
 							ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
 
 							manifestRows.add([soundName, traj[\name], base,
-								"trajectories/" ++ traj[\name] ++ ".csv", trajStart, traj[\dur]]);
+								"proximity_curves/" ++ traj[\name] ++ ".csv", traj[\dur]]);
 
 							// report what ended up on disk
 							nodes.keys.do { arg nodeName;

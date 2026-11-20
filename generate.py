@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Synthesize engine audio from an RPM/torque trajectory -- no audio input
+Synthesize engine audio from an RPM/torque curve -- no audio input
 needed at inference time.
 
-Two ways to provide that trajectory:
+Two ways to provide that curve:
 
 1. From one of your real 4-channel recordings (rpm/torque get extracted
    directly, the same way preprocess.py did for training):

@@ -57,7 +57,7 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 
 - Sentire gives **one channel**, 0 to 1, from the distance between two persons.
 - The value reaching **0.98 (`thresholdTouch`) is the touch event**. While the persons stay in touch, the sound keeps changing with the seconds since the touch began; the change goes on for about 30 s.
-- A "trajectory" in this plan means only this value over time (one sensor curve per recording), not a spatial path.
+- A "proximity curve" in this plan means only this value over time (one sensor curve per recording), not a spatial path.
 - **Consequence for the model:** it trains on 2 s chunks, so a chunk inside a long touch cannot show how long the touch has lasted. Add a derived input `touch_time` (seconds the value has stayed at or above 0.98, else 0), computed in preprocessing and computed the same way live. The GRU alone would average over the touch duration.
 - **Consequence for the dataset:** it needs both short touches (touch sound only) and long holds (stay-in-touch change). Touches in the recording script are short (0.3-3 s) or long (5-45 s), 50/50.
 - **Touch threshold:** Sentire defines a touch as the value reaching `thresholdTouch: 0.98`. So `touch_time` counts the seconds the value has stayed at or above 0.98, and is 0 below it. The recording script's random ramps stay at or below 0.95, so they never trigger a touch by accident; touches are made by an explicit rise to 1.
@@ -67,10 +67,10 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 ## Dataset Recording Script
 
 `sc/record_dataset.scd` records the dataset from Sentire:
-- 20 random, reproducible sensor curves of 60 s (seed in the settings), replayed through each of the sounds. 5 sounds = 100 files, about 115 min.
-- The curves are written to `trajectories/trajectory_NNN.csv` at 100 Hz (`time_s,sensor`), with `manifest.csv`, `events.csv` and `dataset_info.txt` next to the audio.
+- 20 random, reproducible sensor proximity curves of 60 s (seed in the settings), replayed through each of the sounds. 5 sounds = 100 files, about 115 min.
+- The curves are written to `proximity_curves/proximity_curve_NNN.csv` at 100 Hz (`time_s,sensor`), with `manifest.csv`, `events.csv` and `dataset_info.txt` next to the audio.
 - Curve start inside each audio file is measured in the language (a few ms). The sync check in the replay-dataset issue must confirm it.
-- Not yet run against a live Sentire setup: do a short test first (`nTrajectories: 2`, `trajectoryDur: 10`, one sound).
+- Not yet run against a live Sentire setup: do a short test first (`nProximityCurves: 2`, `proximityCurveDur: 10`, one sound).
 
 ---
 
@@ -82,17 +82,17 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 ### Shared test set (build once, use for both tracks)
 - 2-3 of the 10 sounds: at least one pitched/harmonic and one noisy or textural.
 - The one Sentire sensor channel plus the derived time-in-touch input (see "Sensor Signal and Touch").
-- About 20-30 unique sensor curves, with at least 3 held out for validation.
-- Same trajectory-based split and the same held-out evaluation clips for both tracks.
+- About 20-30 unique proximity curves, with at least 3 held out for validation.
+- Same proximity-curve-based split and the same held-out evaluation clips for both tracks.
 
 ### Track A: DDSP (about 4 h)
 1. Copy `model.py` to a prototype version with N sensor inputs plus a sound-ID embedding.
 2. Train briefly (1-2k steps) on the shared set.
-3. Render the held-out trajectories.
+3. Render the held-out proximity curves.
 
 ### Track B: RAVE (about 5 h)
 1. Load an existing pretrained RAVE model (no training). Prefer one whose material resembles your sounds (e.g. textural if your target is textural). It was not trained on your 10 sounds, so this track tests sensor-to-latent control, controllability and CPU latency, not reproduction of your sounds.
-2. Hand-map the sensors to a few latent dimensions and render the held-out trajectories offline.
+2. Hand-map the sensors to a few latent dimensions and render the held-out proximity curves offline.
 3. Check decoder latency on CPU against the block size.
 4. If time remains: train a small sensor-to-latent mapper on the shared set.
 
@@ -215,8 +215,8 @@ Input: [sensor1, sensor2, ..., sensorN] → Configurable → [Neural/Hand-design
 ## Dataset Requirements
 
 ### Minimum Dataset Size
-- **Recommended**: 200-500 high-quality segments (count unique sensor trajectories; see Multi-Sound Replay below)
-- Each segment: 2 seconds of audio + corresponding sensor time-series
+- **Recommended**: 200-500 high-quality segments (count unique proximity curves; see Multi-Sound Replay below)
+- Each segment: 2 seconds of audio + corresponding proximity curve time-series
 - At 48kHz: 96,000 audio samples per segment
 
 ### Data Characteristics
@@ -255,15 +255,15 @@ The same recorded sensor trajectories can be replayed through about 10 different
 - It makes "plug in different sounds" trainable: the sensors drive control and a separate input selects the timbre.
 
 ### What it does not give
-- It adds no sensor diversity. 300 trajectories x 10 sounds = 3,000 segments but still only 300 unique gestures.
-- Count dataset size by **unique sensor trajectories**. That limits generalisation to new gestures.
+- It adds no sensor diversity. 300 proximity curves x 10 sounds = 3,000 segments but still only 300 unique gestures.
+- Count dataset size by **unique proximity curves**. That limits generalisation to new gestures.
 
 ### Required design changes
 1. **Sound-identity conditioning.** Without it, one sensor input maps to 10 different targets and the model averages them (muddy output).
    - Step 1: learned embedding per sound ID, concatenated with the sensor features before the GRU.
    - Step 2 (later): replace the ID with an audio embedding (e.g. CLAP) of a short reference clip, so unseen sounds can be conditioned on. An ID only covers the 10 trained sounds.
-2. **Split by trajectory, not by segment.** The same gesture with sound A in train and sound B in validation is leakage.
-   - Hold out whole trajectories for validation.
+2. **Split by proximity curve, not by segment.** The same gesture with sound A in train and sound B in validation is leakage.
+   - Hold out whole proximity curves for validation.
    - Hold out 1-2 sounds entirely to test generalisation to unseen sounds.
 3. **Know what produced the 10 sounds.** If they are hand-designed SuperCollider synths driven by the sensors, the model is a neural surrogate of those 10 mappings. If only those 10 sounds are needed, running the SC synths directly is simpler and exact. Learning pays off for new sounds and blends between sounds, which is what the held-out-sound test measures.
 4. **Check the synth backend against the sounds.** The harmonic+noise synth assumes a pitched source. Granular, percussive or noise-heavy sounds will fit poorly whatever the conditioning. Inspect the 10 sounds before choosing backends.
