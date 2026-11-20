@@ -122,8 +122,8 @@ Routine {
     "This may take several hours depending on your settings.".postln;
     "".postln;
     
-    // Wait for the recording routine to finish (check if it's still running)
-    while { ~recordingSeries.isRunning } { 
+    // Wait for the recording routine to finish (state 0 = not running)
+    while { ~recordingSeries.notNil and: { ~recordingSeries.state != 0 } } { 
         5.wait  // Check every 5 seconds
     };
     
