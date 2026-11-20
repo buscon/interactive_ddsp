@@ -1,0 +1,124 @@
+# GitHub Issue Updates - Copy & Paste Text
+
+## Issue #1: Prototype bake-off: DDSP vs RAVE
+URL: https://github.com/buscon/interactive_ddsp/issues/1
+
+COPY THIS ENTIRE BODY:
+
+```
+**Estimate:** 10 h  
+**Planned:** 19 Nov – 6 Dec 2026  
+**Depends on:** none
+
+## Goal
+Choose the backbone (DDSP in this repo, or a pretrained RAVE model driven by a sensor-to-latent mapper) from a quick, time-boxed comparison before committing to the full plan.
+
+## Shared test set (build once, use for both tracks)
+- 2-3 of the ~10 sounds: at least one pitched/harmonic and one noisy or textural
+- 1-2 sensors (e.g. proximity, touch)
+- ~20-30 unique sensor proximity curves, at least 3 held out for validation
+- Same proximity-curve-based split and same held-out clips for both tracks
+
+## Track A: DDSP (~4 h)
+1. Prototype copy of `engine_ddsp/model.py` with N sensor inputs plus a sound-ID embedding
+2. Train briefly (1-2k steps) on the shared set
+3. Render the held-out proximity curves
+
+## Track B: RAVE (~5 h)
+1. Load an existing pretrained RAVE model (no training). Prefer one whose material resembles the target sounds. It was not trained on these sounds, so this track tests sensor-to-latent control, controllability and CPU latency, not reproduction of the sounds.
+2. Hand-map sensors to a few latent dimensions and render the held-out proximity curves offline
+3. Check decoder latency on CPU against the block size
+4. If time remains: train a small sensor-to-latent mapper
+
+## Comparison (~1 h)
+Fit to target sounds (DDSP: multi-resolution STFT loss and listening; RAVE: plausibility and timbral range), sensor responsiveness, timbre coverage, controllability, real-time feasibility (CPU latency, export path), compute and effort.
+
+## Decision rule
+- DDSP if it fits the pitched sounds well, responds clearly to the sensors, and the noisy sound is acceptable or can be dropped
+- RAVE if DDSP clearly fails on the textural sound and RAVE fits the latency budget
+- If neither is clearly better: DDSP (less compute, explicit control, code exists)
+
+## Done when
+Both tracks have rendered the same held-out clips, the comparison table is filled in, and the result is recorded in the decision note (#2).
+
+## Caveat
+Rough comparison, not a benchmark: the RAVE track is untrained for these sounds. See `SENSOR_SONIFICATION_PLAN.md`, Phase 0.
+```
+
+
+## Issue #4: Record replay dataset with sync check
+URL: https://github.com/buscon/interactive_ddsp/issues/4
+
+COPY THIS ENTIRE BODY:
+
+```
+**Estimate:** 4 h  
+**Planned:** 7 – 16 Dec 2026  
+**Depends on:** #2
+
+## Goal
+Build the paired sensor/audio dataset by replaying the same sensor proximity curves through about 10 different sounds and recording each replay.
+
+## Tasks
+- Replay each recorded sensor proximity curve through every sound and record the audio
+- Save sensor data and audio with consistent naming (proximity curve ID + sound ID)
+- Write a sync check that verifies sensor/audio alignment is sample-accurate across replays (e.g. a marker event or cross-correlation of a known control)
+- Check audio quality: no clipping, consistent level
+
+## Notes
+Count dataset size by unique proximity curves, not total segments: 300 proximity curves x 10 sounds is 3,000 segments but still 300 unique gestures.
+
+## Done when
+Aligned sensor/audio pairs exist for all proximity curves and sounds, and the sync check passes.
+
+## Update (19 Nov 2026)
+A recording script now exists: `sc/record_dataset.scd`. It replays 20 random, reproducible 60 s sensor proximity curves through each sound (5 sounds = 100 files, about 115 min) and writes `proximity_curves/*.csv` (100 Hz), `manifest.csv`, `events.csv` and `dataset_info.txt`. Touches are short (0.3-3 s) or long (5-45 s), 50/50. The script has **not** been run against a live Sentire setup: do a short test first (`nProximityCurves: 2`, `proximityCurveDur: 10`, one sound). The proximity curve start inside each audio file is measured in the language (a few ms); the sync check in this issue must confirm it.
+```
+
+
+## Issue #5: Update preprocess.py: stats, proximity curve split, held-out sounds
+URL: https://github.com/buscon/interactive_ddsp/issues/5
+
+Title: Update preprocess.py: stats, proximity curve split, held-out sounds
+
+COPY THIS ENTIRE BODY:
+
+```
+**Estimate:** 2 h  
+**Planned:** 14 – 17 Dec 2026  
+**Depends on:** #3, #4
+
+## Tasks
+- Read the sensor list from the config
+- Compute per-channel mean/std
+- Split train/validation **by proximity curve**, so the same gesture never appears in train with one sound and validation with another
+- Hold out 1-2 sounds entirely for the unseen-sound test
+- Write the sound ID per segment
+
+## Done when
+A preprocessed dataset exists, and a test confirms no proximity curve is shared between train and validation.
+
+## Update (19 Nov 2026)
+Also compute and store the derived `touch_time` input (seconds the value has stayed at 0.98, else 0) per control frame, from the sensor proximity curve csv. It must be computed the same way live.
+
+**Threshold confirmed:** Sentire defines a touch as the value reaching `thresholdTouch: 0.98`. `touch_time` counts the seconds the value has stayed at or above 0.98, and is 0 below it.
+```
+
+
+## Issue #9: Evaluate on held-out proximity curves and a held-out sound
+URL: https://github.com/buscon/interactive_ddsp/issues/9
+
+Title: Evaluate on held-out proximity curves and a held-out sound
+
+Body (find and replace):
+- `held-out trajectories` → `held-out proximity curves`
+
+
+## Summary of Changes
+
+| Issue | Title Change | Body Changes |
+|-------|--------------|--------------|
+| #1 | None | trajectory-based split → proximity-curve-based split |
+| #4 | None | trajectories → proximity curves, nTrajectories → nProximityCurves, etc. |
+| #5 | "trajectory split" → "proximity curve split" | All "trajectory" → "proximity curve" |
+| #9 | "trajectories" → "proximity curves" | "trajectories" → "proximity curves" |
