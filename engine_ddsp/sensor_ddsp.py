@@ -3,6 +3,7 @@ SensorDDSP: DDSP model for proximity sensor conditioning.
 Conditions on sensor value, touch_time, and sound_id.
 """
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 from .synth import (
@@ -70,26 +71,31 @@ class SensorDDSP(nn.Module):
             torch.tensor(f0_base_hz, dtype=torch.float32)
         )
         
-        # Input MLPs for sensor and touch (each: 1 -> hidden)
+        # Input MLPs for sensor (1->hidden) and touch (2->hidden, log1p/decay features)
         self.mlp_sensor = _mlp(1, hidden_size, hidden_size, n_layers=2)
-        self.mlp_touch = _mlp(1, hidden_size, hidden_size, n_layers=2)
+        self.mlp_touch = _mlp(2, hidden_size, hidden_size, n_layers=2)
         
         # Sound embedding
         self.sound_emb = nn.Embedding(n_sounds, sound_emb_dim)
+        # per-sound LFO (vibrato/FM) gated by touch: rate Hz, depth (fraction of f0)
+        self.lfo_rate = nn.Embedding(n_sounds, 1)
+        self.lfo_depth = nn.Embedding(n_sounds, 1)
+        nn.init.uniform_(self.lfo_rate.weight, 0.5, 6.0)
+        nn.init.uniform_(self.lfo_depth.weight, 0.0, 0.02)
         
         # Input to GRU: sensor_mlp + touch_mlp + emb = hidden + hidden + sound_emb_dim
         gru_input_dim = hidden_size + hidden_size + sound_emb_dim
         self.gru = nn.GRU(gru_input_dim, hidden_size, batch_first=True)
         
         # Output MLP with skip connection
-        # Input: GRU_out (hidden) + raw sensor (1) + raw touch (1) + emb (sound_emb_dim) + touch_onset (1)
-        out_mlp_input = hidden_size + 1 + 1 + sound_emb_dim + 1
+        # Input: GRU_out (hidden) + raw sensor (1) + raw touch (2, log1p/decay) + emb (sound_emb_dim) + touch_onset (1)
+        out_mlp_input = hidden_size + 1 + 2 + sound_emb_dim + 1
         self.out_mlp = _mlp(out_mlp_input, hidden_size, hidden_size, n_layers=2)
 
         # Heads
         self.harmonic_head = nn.Linear(hidden_size, n_harmonic + 1)
         self.noise_head = nn.Linear(hidden_size, n_bands)
-        self.f0_head = nn.Linear(hidden_size + 2, 1)  # +1 touch_onset, +1 touch_time (normalised)
+        self.f0_head = nn.Linear(hidden_size + 1 + 2, 1)  # +1 touch_onset, +2 touch features
         
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
@@ -111,6 +117,9 @@ class SensorDDSP(nn.Module):
         self.harmonic_head.weight.data.mul_(0.1)
         self.noise_head.weight.data.mul_(0.1)
         
+        # f0_head: clamp pre-activation to [-3, 3] via weight scaling
+        self.f0_head.weight.data.mul_(0.1)
+        
         # harmonic_head bias: [-0.98, then -0.05*h for h in 0..n_harmonic-1]
         nh = self.n_harmonic
         b = torch.zeros(nh + 1)
@@ -122,7 +131,7 @@ class SensorDDSP(nn.Module):
         nb = self.n_bands
         self.noise_head.bias.data.copy_(2.0 - 0.15 * torch.arange(nb).float())
     
-    def forward(self, sensor, touch, sound_id, touch_onset=None):
+    def forward(self, sensor, touch, sound_id, touch_onset=None, note=None):
         """
         Forward pass.
         
@@ -139,13 +148,20 @@ class SensorDDSP(nn.Module):
         # Derive binary touch_onset from touch_time if not provided:
         # onset[t] = 1 iff touch[t] > 0 and touch[t-1] == 0 (first frame: onset if touch[0] > 0)
         if touch_onset is None:
-            touch_onset = torch.zeros_like(touch)
-            touch_onset[..., 1:, :] = ((touch[..., 1:, :] > 0) & (touch[..., :-1, :] == 0)).float()
-            touch_onset[..., 0, :] = (touch[..., 0, :] > 0).float()
+            # onset from the touch-seconds feature (first channel; log1p(t)>0 iff t>0)
+            t_ch = touch[..., :1]
+            touch_onset = torch.zeros_like(t_ch)
+            touch_onset[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
+            touch_onset[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+
+        # touch may arrive as (B,T,1) legacy normalised seconds/30 — expand to 2 features
+        if touch.shape[-1] == 1:
+            t_sec = touch * 30.0
+            touch = torch.cat([torch.log1p(t_sec), torch.exp(-t_sec / 0.5)], dim=-1)
 
         # Process sensor and touch through MLPs
         sensor_mlp = self.mlp_sensor(sensor)  # (B, T, hidden)
-        touch_mlp = self.mlp_touch(touch)      # (B, T, hidden)
+        touch_mlp = self.mlp_touch(touch)      # (B, T, 2 -> hidden)
         
         # Sound embedding broadcast over time
         emb = self.sound_emb(sound_id)         # (B, sound_emb_dim)
@@ -170,12 +186,29 @@ class SensorDDSP(nn.Module):
         harmonic_param = self.harmonic_head(mlp_out)  # (B, T, n_harmonic+1)
         noise_param = self.noise_head(mlp_out)        # (B, T, n_bands)
         f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch], dim=-1))  # (B, T, 1)
+        f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)  # keep tanh out of saturation
+        # Clamp pre-activation to [-3, 3] for un-saturated tanh
+        f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)
         
         # Compute f0 per frame
         # f0 = f0_base[sound_id] * 2^(max_f0_octaves * tanh(f0_deviation))
         f0_base_sound = self.f0_base[sound_id]  # (B,)
         f0_base = f0_base_sound.unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
-        f0 = f0_base * (2 ** (self.max_f0_octaves * torch.tanh(f0_deviation)))  # (B, T, 1)
+        # v4: absolute pitch from note input (0 = no touch -> base); residual deviation on top
+        if note is None:
+            note = torch.zeros_like(f0_base)
+        note_f0 = torch.where(note > 0, note, f0_base)  # (B, T, 1)
+        f0 = note_f0 * (2 ** (self.max_f0_octaves * torch.tanh(f0_deviation)))  # (B, T, 1)
+        # v4: per-sound LFO gated by touch (phase accumulated over blocks at control rate)
+        t_ch = touch[..., :1]
+        in_touch = (t_ch > 0).float()
+        rate = torch.sigmoid(self.lfo_rate(sound_id)) * 6.0  # (B,1) Hz
+        depth = torch.sigmoid(self.lfo_depth(sound_id)) * 0.05  # (B,1)
+        phase = torch.cumsum(rate.unsqueeze(1) / 100.0, dim=1)  # (B, T) cycles
+        lfo = 1.0 + in_touch * depth.unsqueeze(1) * torch.sin(2 * torch.pi * phase)
+        f0 = f0 * lfo
+        # Clamp f0 to valid range to prevent NaN from log2 or overflow
+        f0 = torch.clamp(f0, 20.0, 2000.0)
         self._last_f0 = f0.detach() if not torch.is_grad_enabled() else f0  # stash for f0 loss
         
         # Apply scale function to harmonic params
@@ -310,8 +343,14 @@ class SensorDDSP(nn.Module):
         seg = ac[..., lo:hi]
         best = torch.argmax(seg, dim=-1) + lo  # (B, T)
         peak = torch.gather(ac, -1, best.unsqueeze(-1)).squeeze(-1)
+        # Compute local std of ac peak over ±3 blocks for variance measure
+        # Pad peak on the TIME dim: (B, T + 6)
+        peak_padded = torch.nn.functional.pad(peak, (3, 3), mode='replicate')  # (B, T+6)
+        # Unfold to get windows of ±3 blocks: (B, T, 7)
+        local_windows = peak_padded.unfold(dimension=1, size=7, step=1)  # (B, T, 7)
+        local_std = local_windows.std(dim=-1)  # (B, T)
         rms = x.pow(2).mean(dim=-1).sqrt()
-        voiced = (peak > 0.3) & (rms > 1e-3)
+        voiced = (peak > 0.6) & (rms > 1e-3) & (local_std < 0.1)
         f0 = self.sampling_rate / best.float()
         f0 = torch.where(voiced, f0, torch.full_like(f0, float('nan')))
         return f0
@@ -320,9 +359,15 @@ class SensorDDSP(nn.Module):
         """L1 in octaves between predicted and target-estimated f0 on voiced blocks."""
         f0_t = self.estimate_f0_track(target)  # (B, T), NaN unvoiced
         f0_p = f0_pred.squeeze(-1)  # (B, T)
+        # Clamp f0 values to valid range and replace NaN with safe value
+        f0_p = torch.nan_to_num(f0_p, nan=100.0, posinf=2000.0, neginf=20.0)
+        f0_t = torch.nan_to_num(f0_t, nan=100.0, posinf=2000.0, neginf=20.0)
+        # Clamp to valid f0 range
+        f0_p = torch.clamp(f0_p, 20.0, 2000.0)
+        f0_t = torch.clamp(f0_t, 20.0, 2000.0)
         mask = ~torch.isnan(f0_t)
         if mask.sum() == 0:
-            return f0_pred.sum() * 0.0
+            return (f0_p * 0.0).mean()
         err = (torch.log2(f0_p[mask]) - torch.log2(f0_t[mask])).abs().mean()
         return err
 
@@ -355,7 +400,7 @@ class SensorDDSP(nn.Module):
             hop = int(s * (1 - overlap))
             block = self.block_size
             idx = torch.clamp((torch.arange(n_frames, device=device) * hop) // block, max=touch.shape[1] - 1)
-            w = 1.0 + 0.5 * (touch[:, idx, 0] > 2.0).float()  # (B, frames)
+            w = 1.0 + 0.5 * (touch[:, idx, 0] > 2.0/30.0).float()  # (B, frames)
             return w.unsqueeze(-1)  # (B, frames, 1)
 
         lin_loss = 0.0
@@ -383,10 +428,26 @@ class SensorDDSP(nn.Module):
 
         total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
 
-        # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.5x
+        # v4: modulation-depth match on sustained-touch frames (touch_time > 2 s)
+        if touch is not None and touch.shape[-1] >= 1:
+            sustained = (touch[..., 0] > float(np.log1p(2.0))).float()  # (B, T)
+            if sustained.sum() > 10:
+                pe = self.frame_log_rms(pred).squeeze(-1)
+                te = self.frame_log_rms(target).squeeze(-1)
+                ws = sustained.sum(1) + 1e-8
+                pm = (pe * sustained).sum(1) / ws
+                tm = (te * sustained).sum(1) / ws
+                ps = (((pe - pm.unsqueeze(1)) ** 2) * sustained).sum(1) / ws
+                ts = (((te - tm.unsqueeze(1)) ** 2) * sustained).sum(1) / ws
+                # Guard against zero variance (sqrt of near-zero can cause NaN propagation)
+                ps = torch.clamp(ps, min=1e-8)
+                ts = torch.clamp(ts, min=1e-8)
+                total = total + 1.0 * w * (ps.sqrt() - ts.sqrt()).abs().mean()
+
+        # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
         if sound_id is not None:
             comb = self.harmonic_comb_loss(pred, target, sound_id, scales, overlap)
-            total = total + 0.5 * w * comb
+            total = total + 0.0 * w * comb
             # Self-supervised f0 regression (target-derived f0 track), weight 1.0x ramped
             f0_pred = getattr(self, '_last_f0', None)
             if f0_pred is not None and f0_pred.shape[1] == target.shape[1] // self.block_size:

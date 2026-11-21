@@ -134,6 +134,44 @@ def compute_spectral_centroid_envelope(audio, frame_size=2048, hop=480, sr=48000
     return centroids
 
 
+def compute_hf_ratio(audio, sr=48000, cutoff=6000.0):
+    """Compute log-energy above cutoff frequency over total log-energy."""
+    frame_size = 2048
+    hop = 480
+    n_frames = (len(audio) - frame_size) // hop + 1
+    hf_ratios = []
+    for i in range(n_frames):
+        frame = audio[i*hop:i*hop+frame_size]
+        frame = frame * np.hanning(frame_size)
+        spectrum = np.abs(np.fft.rfft(frame))
+        freqs = np.fft.rfftfreq(frame_size, 1/sr)
+        # Total energy
+        total_energy = (spectrum**2).sum() + 1e-12
+        # High-frequency energy (above cutoff)
+        hf_mask = freqs > cutoff
+        hf_energy = (spectrum[hf_mask]**2).sum() + 1e-12
+        # Log-energy ratio
+        hf_ratios.append(np.log(hf_energy / total_energy + 1e-8))
+    return np.mean(hf_ratios)
+
+
+def compute_mod_depth(audio, touch_time_raw, sr=48000):
+    """Compute std of log-RMS envelope over frames where touch_time_raw > 2 s."""
+    frame_size = 480
+    hop = 480
+    n_blocks = len(audio) // frame_size
+    touch_time = touch_time_raw[:n_blocks] if len(touch_time_raw) > n_blocks else touch_time_raw
+    mask = (touch_time > 2.0)
+    if mask.sum() < 4:
+        return 0.0
+    rms = np.zeros(n_blocks)
+    for i in range(n_blocks):
+        frame = audio[i*hop:(i+1)*hop]
+        rms[i] = np.sqrt(np.mean(frame**2) + 1e-12)
+    log_rms = np.log(rms + 1e-8)
+    return np.std(log_rms[mask])
+
+
 def _estimate_f0_autocorr(x, sr=48000, fmin=50.0, fmax=500.0):
     """Autocorrelation f0 estimate on a short window; None if unvoiced/quiet."""
     x = np.asarray(x, dtype=np.float64)
@@ -248,7 +286,8 @@ def main():
     
     # Create model
     model_config = run_config["model"].copy()
-    model_config["f0_base_hz"] = f0_base
+    override = model_config.pop("f0_base_hz_override", None)
+    model_config["f0_base_hz"] = override if override else f0_base
     model = SensorDDSP(**model_config).to(device)
     model.eval()
     
@@ -308,13 +347,19 @@ def main():
             # Convert to tensor
             audio_t = torch.from_numpy(audio).unsqueeze(0).to(device)
             sensor_t = torch.from_numpy(sensor).unsqueeze(0).unsqueeze(-1).to(device)
-            touch_t = torch.from_numpy(touch).unsqueeze(0).unsqueeze(-1).to(device)
+            touch_t = torch.from_numpy(touch).unsqueeze(0).to(device)
+            if touch_t.dim() == 2:
+                touch_t = touch_t.unsqueeze(-1)
+            note_np = np.asarray(item.get("note", np.zeros_like(sensor)), dtype=np.float32)
+            note_t = torch.from_numpy(note_np).unsqueeze(0).to(device)
+            if note_t.dim() == 2:
+                note_t = note_t.unsqueeze(-1)
             sound_id_t = torch.tensor([sound_id], dtype=torch.long, device=device)
             
             # Run model in eval mode
             try:
                 with torch.no_grad():
-                    pred = model(sensor_t, touch_t, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                    pred = model(sensor_t, touch_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1).cpu().numpy()
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     print("    GPU OOM, falling back to chunked rendering...")
@@ -334,11 +379,16 @@ def main():
                         
                         # Extract chunk
                         sensor_chunk = torch.from_numpy(sensor[start//480:end//480]).unsqueeze(0).unsqueeze(-1).to(device)
-                        touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).unsqueeze(-1).to(device)
+                        touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).to(device)
+                        if touch_chunk.dim() == 2:
+                            touch_chunk = touch_chunk.unsqueeze(-1)
+                        note_chunk = torch.from_numpy(note_np[start//480:end//480]).unsqueeze(0).to(device)
+                        if note_chunk.dim() == 2:
+                            note_chunk = note_chunk.unsqueeze(-1)
                         audio_target_chunk = audio[start:end]
                         
                         with torch.no_grad():
-                            pred_chunk = model(sensor_chunk, touch_chunk, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                            pred_chunk = model(sensor_chunk, touch_chunk, sound_id_t, note=note_chunk).squeeze(0).squeeze(-1).cpu().numpy()
                         
                         # Crossfade
                         fade_samples = overlap_size // 480
@@ -414,9 +464,14 @@ def main():
             target_rms_val = np.sqrt(np.mean(audio**2))
             rms_ratio = pred_rms_val / (target_rms_val + 1e-8)
             
-            touch_time_raw = touch * 30.0  # denormalise (clip(t/30,0,2))
+            touch_time_raw = item["touch_raw"] if "touch_raw" in item else np.expm1(touch[..., 0])  # raw seconds
             onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch_time_raw)
             sustained_corr = compute_sustained_touch_corr(pred, audio, touch_time_raw)
+            # New metrics: HF ratio (log-energy above 6kHz over total) and mod depth (std of log-RMS where touch>2s)
+            hf_ratio_pred = compute_hf_ratio(pred)
+            hf_ratio_tgt = compute_hf_ratio(audio)
+            mod_depth_pred = compute_mod_depth(pred, touch_time_raw)
+            mod_depth_tgt = compute_mod_depth(audio, touch_time_raw)
             metrics = {
                 "sound": sound,
                 "curve": curve,
@@ -426,6 +481,10 @@ def main():
                 "rms_ratio": rms_ratio,
                 "touch_onset_f0_err_cents": onset_f0_err if onset_f0_err is not None else -1.0,
                 "sustained_touch_corr": sustained_corr if sustained_corr is not None else -1.0,
+                "hf_ratio_pred": hf_ratio_pred,
+                "hf_ratio_tgt": hf_ratio_tgt,
+                "mod_depth_pred": mod_depth_pred,
+                "mod_depth_tgt": mod_depth_tgt,
             }
             all_metrics.append(metrics)
             metrics_by_sound[sound].append(metrics)
@@ -439,7 +498,7 @@ def main():
             sensor_zero = torch.zeros_like(sensor_t)
             touch_zero = torch.zeros_like(touch_t)
             with torch.no_grad():
-                pred_abl_zero = model(sensor_zero, touch_zero, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                pred_abl_zero = model(sensor_zero, touch_zero, sound_id_t, note=note_t).squeeze(0).squeeze(-1).cpu().numpy()
             
             multiscale_abl_zero = compute_multiscale_loss(pred_abl_zero, audio, scales, overlap, device)
             pred_rms_abl_zero = compute_rms_envelope(pred_abl_zero)
@@ -447,9 +506,9 @@ def main():
             
             # (ii) sensor circularly rolled, touch recomputed with dataset rule
             # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
-            sensor_rolled = np.roll(sensor, len(sensor) // 2)
+            sensor_rolled = np.roll(sensor, 2000)  # shared protocol: roll 2000 frames (20 s), per curve-018 diagnostic
             touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=0.98)
-            touch_rolled = np.clip(touch_time_rolled / 30.0, 0.0, 2.0)
+            touch_rolled = np.clip(np.stack([np.log1p(touch_time_rolled), np.exp(-touch_time_rolled / 0.5)], axis=-1), 0.0, 10.0)  # 2-feature touch, dataset rule
             
             # Verify against stored touch_time
             stored_touch_time = item["touch_raw"]  # This is touch_time
@@ -468,10 +527,12 @@ def main():
                 print(f"    Touch recomputation verified (max diff={touch_diff:.6f})")
             
             sensor_rolled_t = torch.from_numpy(sensor_rolled).unsqueeze(0).unsqueeze(-1).to(device)
-            touch_rolled_t = torch.from_numpy(touch_rolled).unsqueeze(0).unsqueeze(-1).to(device)
+            touch_rolled_t = torch.from_numpy(touch_rolled).unsqueeze(0).to(device)
+            if touch_rolled_t.dim() == 2:
+                touch_rolled_t = touch_rolled_t.unsqueeze(-1)
             
             with torch.no_grad():
-                pred_abl_rolled = model(sensor_rolled_t, touch_rolled_t, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                pred_abl_rolled = model(sensor_rolled_t, touch_rolled_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1).cpu().numpy()
             
             multiscale_abl_rolled = compute_multiscale_loss(pred_abl_rolled, audio, scales, overlap, device)
             pred_rms_abl_rolled = compute_rms_envelope(pred_abl_rolled)
@@ -480,12 +541,12 @@ def main():
             print(f"      Ablation zero: MS loss={multiscale_abl_zero:.4f}, RMS corr vs normal={rms_corr_abl_zero:.4f}")
             print(f"      Ablation rolled: MS loss={multiscale_abl_rolled:.4f}, RMS corr vs normal={rms_corr_abl_rolled:.4f}")
             
-            # Save ablation results
+            # Save ablation results with SAME common_gain as pred/target dry (no per-file peak normalization)
             abl_zero_path = os.path.join(args.out, f"{sound}_{curve}_pred_abl_zero.wav")
             abl_rolled_path = os.path.join(args.out, f"{sound}_{curve}_pred_abl_rolled.wav")
             
-            sf.write(abl_zero_path, pred_abl_zero / (np.abs(pred_abl_zero).max() + 1e-8), 48000, subtype='PCM_16')
-            sf.write(abl_rolled_path, pred_abl_rolled / (np.abs(pred_abl_rolled).max() + 1e-8), 48000, subtype='PCM_16')
+            sf.write(abl_zero_path, pred_abl_zero * common_gain, 48000, subtype='PCM_16')
+            sf.write(abl_rolled_path, pred_abl_rolled * common_gain, 48000, subtype='PCM_16')
             
             # Update metrics with ablation
             metrics["multiscale_abl_zero"] = multiscale_abl_zero
@@ -504,6 +565,10 @@ def main():
     overall_mean["rms_corr_abl_zero"] = np.mean([m.get("rms_corr_abl_zero", 0) for m in all_metrics])
     overall_mean["multiscale_abl_rolled"] = np.mean([m.get("multiscale_abl_rolled", 0) for m in all_metrics])
     overall_mean["rms_corr_abl_rolled"] = np.mean([m.get("rms_corr_abl_rolled", 0) for m in all_metrics])
+    overall_mean["hf_ratio_pred"] = np.mean([m.get("hf_ratio_pred", 0) for m in all_metrics])
+    overall_mean["hf_ratio_tgt"] = np.mean([m.get("hf_ratio_tgt", 0) for m in all_metrics])
+    overall_mean["mod_depth_pred"] = np.mean([m.get("mod_depth_pred", 0) for m in all_metrics])
+    overall_mean["mod_depth_tgt"] = np.mean([m.get("mod_depth_tgt", 0) for m in all_metrics])
     
     sound_means = {}
     for sound in sounds:

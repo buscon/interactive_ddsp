@@ -179,3 +179,31 @@ v3 achieves the best overall performance across all key metrics while maintainin
 - Training log: `runs/bakeoff_ddsp_poc/stageB_v3/train_log.csv`
 - Checkpoint: `runs/bakeoff_ddsp_poc/stageB_v3/`
 - Evaluation renders: `runs/bakeoff_ddsp_poc/stageB_v3_eval/*.wav`
+
+---
+
+## Addendum: Track A v3→v4c Comparison (2026-11-21)
+
+### Summary
+v4c (branch `orch/trackA-v4` @ 7e8c92e): note-as-input f0 (labels in `bakeoff_notes.json`, scale-snapped per touch segment), per-sound LFO gated by touch on f0, mod-depth loss on sustained-touch frames, NaN guards (f0 clamp [20,2000] Hz, nan_to_num in f0 regression, batch skip on non-finite loss). Eval ablation now uses the shared roll-2000 protocol; new metrics hf_ratio_* (brightness) and mod_depth_*.
+
+### Results: v3 vs v4a vs v4c (held-out, 20 files)
+| Metric | v3 | v4a | v4c |
+|--------|-----|-----|-----|
+| multiscale_loss | 9.036 | 9.950 | 9.402 |
+| rms_envelope_corr | 0.875 | 0.802 | 0.772 |
+| touch_onset_f0_err_cents | 1139 | 1188 | **1054** |
+| mod_depth_pred / tgt | n/a | 0.047 / 0.282 | **0.126** / 0.282 |
+| hf_ratio_pred / tgt | n/a | -12.02 / -12.52 | **-11.14** / -12.52 |
+| abl_rolled / abl_zero | 0.034 / -0.085 | 0.034 / -0.154 | **-0.116 / -0.211** |
+| val loss / silence | 6.20 / 23.22 | 8.05 / 23.22 | 7.04 / 23.22 |
+
+### Gap status (verified by qwen3.5-397b)
+1. **Touch-onset pitch**: PARTIALLY IMPROVED, NOT CLOSED — mean onset f0 err 1139→1054 cents; spot-checks show inconsistent note tracking (some onsets ~100 cents, others >1000).
+2. **Sustained self-modulation**: SIGNIFICANTLY IMPROVED, NOT CLOSED — mod_depth_pred 0.047→0.126 vs target 0.282; brightness close (hf_ratio -11.14 vs -12.52). sustained_touch_corr is a flawed metric (target loudness flat with touch_time) — use mod_depth_*.
+
+### Verdict
+**Ship v4c for Issue #1.** Sensor conditioning verified under roll-2000 ablation (corr < 0.5 with margin); training stable, no NaN. Residual gaps documented above.
+
+### Files
+- Metrics: `runs/bakeoff_ddsp_poc/stageB_v4c_eval/metrics.json`; log `stageB_v4c/train_log.csv`; renders `stageB_v4c_eval/*.wav`; branch `orch/trackA-v4` @ 7e8c92e

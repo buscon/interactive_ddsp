@@ -17,7 +17,9 @@ model:
   sampling_rate: 48000
   block_size: 480
   sound_emb_dim: 16
-  max_f0_octaves: 1.0
+  max_f0_octaves: 2.0
+  # f0 roots from Sentire SC sources (sound_id order: canopy, forestPad, swarm, percussion, moss)
+  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
 
 train:
   batch: 8

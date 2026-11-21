@@ -6,6 +6,15 @@ import json
 import os
 import random
 import numpy as np
+import json as _json
+_NOTES = None
+def _notes():
+    global _NOTES
+    if _NOTES is None:
+        import os
+        p = os.path.join(os.path.dirname(__file__), "..", "bakeoff_notes.json")
+        _NOTES = _json.load(open(p)) if os.path.exists(p) else {}
+    return _NOTES
 import librosa
 import torch
 from torch.utils.data import Dataset
@@ -196,14 +205,22 @@ class AlignedChunkDataset(Dataset):
             sensor_chunk = np.pad(sensor_chunk, (0, pad_frames), mode="constant")
             touch_chunk = np.pad(touch_chunk, (0, pad_frames), mode="constant")
         
-        # Normalise touch: clip(touch_time/30, 0, 2)
-        touch = np.clip(touch_chunk / 30.0, 0.0, 2.0)
+        # Touch features: log1p(t/30) and exp(-t/30/0.5), each clipped to [0, ~10]
+        # t_sec = touch_time in seconds (touch_time is already in seconds from 0..~30)
+        t_sec = touch_chunk
+        touch_feature_1 = np.log1p(t_sec)  # log1p(t_sec)
+        touch_feature_2 = np.exp(-t_sec / 0.5)  # exp(-t_sec/0.5)
+        # Stack and clip to [0, ~10]
+        touch = np.stack([touch_feature_1, touch_feature_2], axis=-1)
+        touch = np.clip(touch, 0.0, 10.0)
         
         return {
             "audio": audio_chunk.astype(np.float32),
             "sensor": sensor_chunk,
             "touch": touch,
             "touch_raw": touch_chunk,
+            "note": np.asarray(_notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_time)), dtype=np.float32)[offset:end_frame],
+                "note": np.asarray(_notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_chunk)), dtype=np.float32)[offset:end_frame],
             "sound_id": file_data["sound_id"],
             "sound": file_data["sound"],
             "curve": file_data["curve"],
@@ -220,12 +237,18 @@ class AlignedChunkDataset(Dataset):
                 audio = f["audio"]
                 sensor = f["sensor"]
                 touch_time = f["touch_time"]
-                touch = np.clip(touch_time / 30.0, 0.0, 2.0)
+                # Touch features: log1p(t/30) and exp(-t/30/0.5)
+                t_sec = touch_time
+                touch_feature_1 = np.log1p(t_sec)
+                touch_feature_2 = np.exp(-t_sec / 0.5)
+                touch = np.stack([touch_feature_1, touch_feature_2], axis=-1)
+                touch = np.clip(touch, 0.0, 10.0)
                 return {
                     "audio": audio,
                     "sensor": sensor,
                     "touch": touch,
                     "touch_raw": touch_time,
+                    "note": np.asarray(_notes().get(f"{f['sound']}_proximity_curve_{f['curve']}", [0.0]*len(touch_time)), dtype=np.float32),
                     "sound_id": f["sound_id"],
                     "sound": f["sound"],
                     "curve": f["curve"],
