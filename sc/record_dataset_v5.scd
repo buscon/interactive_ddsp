@@ -238,8 +238,7 @@ File.mkdir(folder +/+ "proximity_curves");
 ~recordingSeries = fork {
 	try {
 		var nodes = (), trajectories = List[], silentBuf, rate = settings[\controlRate];
-		var soundEnv, freqBus, freqBusIndex, freqBusName;
-		var perFile = settings[\settle] + settings[\lead] + settings[\proximityCurveDur] + settings[\tail] + 1;
+				var perFile = settings[\settle] + settings[\lead] + settings[\proximityCurveDur] + settings[\tail] + 1;
 
 		settings[\nodes].do { arg name;
 			nodes[name] = sentire.signalFlow.perform(name);
@@ -273,7 +272,7 @@ File.mkdir(folder +/+ "proximity_curves");
 			(settings[\nProximityCurves] * settings[\sounds].size * perFile / 60).round(1)).postln;
 
 		settings[\sounds].do { arg sound;
-			var soundName = sound[0], soundKey = sound[1], freqPoller = nil;
+			var soundName = sound[0], soundKey = sound[1];
 
 			if (SentireSoundEnvironment.all[soundKey].isNil) {
 				"Dataset: sound environment '%' not loaded, skipping %".format(soundKey, soundName).warn;
@@ -282,143 +281,23 @@ File.mkdir(folder +/+ "proximity_curves");
 				ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
 				settings[\settle].wait;
 
-				// V5: Get the freq bus info from the sound environment
-				// The freq mapping is in SentireSoundEnvironment.mappingNodes[\freq]
-				// It's a NodeProxy.audio(1) that outputs the frequency
-				// The bus is created when mappingNodes[\freq] is connected to continuousProxy[\freq]
-				soundEnv = SentireSoundEnvironment.all[soundKey];
-				freqBus = nil;
-				freqBusIndex = nil;
-				freqBusName = "freq";  // default name
-				
-				if (soundEnv.notNil and: { soundEnv.mappingNodes.notNil }) {
-					// mappingNodes[\freq] is a NodeProxy.audio(1)
-					var freqNode = soundEnv.mappingNodes[\freq];
-					if (freqNode.notNil) {
-						// freqNode.bus is a NodeProxyBus, get its index
-						freqBus = freqNode.bus;
-						if (freqBus.notNil) {
-							freqBusIndex = freqBus.index;
-							freqBusName = freqBus.name.asString;
-						};
-					};
-				};
-				
-				if (freqBusIndex.isNil) {
-					"Dataset: could not find freq bus for sound %, logging disabled".format(soundName).warn;
-				} {
-					"Dataset: freq bus for %: index=%, name=%".format(soundName, freqBusIndex, freqBusName).postln;
-				};
-				
-				trajectories.do { arg traj;
-					var base = "%_%".format(soundName, traj[\name]);
-					var path = folder +/+ base ++ ".aiff";
-					var firstFile = folder +/+ "%_%.aiff".format(base, nodes.keys.asArray.first);
-					var waited = 0, prepared = false, t0, proximity_curveStart;
-					var event = { arg label;
-						eventRows.add([soundName, traj[\name], base, label, (SystemClock.seconds - t0).round(0.001)]);
-					};
+				// V5: log touch onsets from the sensor trajectory (freq filled later by make_note_labels.py)
+				noteRows = noteRows ++ (traj[\sensorValues].collect { arg v, i;
+					var onset = (i > 0) and: { v >= settings[\thresholdTouch] } and: { traj[\sensorValues][i-1] < settings[\thresholdTouch] };
+					if (onset) { [soundName, traj[\name], (i / rate).round(0.001), 0.0] } { nil } });
+				noteRows = noteRows.select { arg r; r.notNil };
 
-					if (settings[\skipExisting] and: { File.exists(firstFile) }) {
-						"Dataset: skipping %, already recorded".format(base).postln;
-					} {
-						"Dataset: recording %".format(base).postln;
-
-						// signal at 0, let the sound settle
-						ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
-						settings[\settle].wait;
-
-						recorder = NodeRecorder(path, nodes, true);
-						recorder.prepareRecording({ prepared = true });
-						while { prepared.not and: { waited < 10 } } { 0.1.wait; waited = waited + 0.1 };
-						if (prepared.not) { Error("Recorder was not prepared for %".format(base)).throw };
-
-						recorder.startRecording;
-						t0 = SystemClock.seconds;
-						event.("recording_start");
-						settings[\lead].wait;
-
-						// replay the proximity curve
+				// replay the proximity curve
 						proximity_curveStart = (SystemClock.seconds - t0).round(0.001);
 						event.("proximity_curve_start");
 						ctl.set(\buf, traj[\buffer].bufnum, \rate, rate, \t_go, 1);
 						
-						// V5: Start freq polling routine
-						// We need to poll the freq bus at control rate (100 Hz)
-						// and detect touch onsets in the sensor signal
-						if (freqBusIndex.notNil) {
-							var pollRate, pollDur, sampleCount, lastSensorVal, lastFreqVal, hasLastFreq, pollRoutine, pollSynthDef, pollOutBus, pollSynth;
-							// Create a polling routine that:
-							// 1. Polls the freq bus at control rate
-							// 2. Tracks sensor crossings (touch onset at 0.98)
-							// 3. Logs freq value at each touch onset
-							pollRate = settings[\controlRate];
-							pollDur = settings[\proximityCurveDur];
-							sampleCount = (pollDur * pollRate).asInteger;
-							lastSensorVal = 0.0;
-							lastFreqVal = 0.0;
-							hasLastFreq = false;
-							pollRoutine;
-							
-							// We'll use a Synth to read from the freq bus and output to a control bus
-							// Then poll that control bus from the language
-							pollSynthDef = SynthDef(\freqPoller, {
-								arg freqBus;
-								Out.kr(0, In.kr(freqBus, 1));  // output to bus 0
-							});
-							pollSynthDef.add;
-							pollOutBus = Bus.control(server, 1);
-							pollSynth = Synth.after(nil, \freqPoller, [
-								\freqBus, freqBusIndex
-							]);
-							
-							freqPoller = (bus: pollOutBus, synth: pollSynth);
-							
-							pollRoutine = {
-								var samples = FloatArray(sampleCount);
-								var sampleTime = 1.0 / pollRate;
-								var touchStartIdx = -1;
-								var touchStartS = nil;
-								var curveName = traj[\name];
-								var sensorValues = traj[\sensorValues];
-								var sensorIndex = 0;
-								
-								sampleCount.do { arg i;
-									var freqVal, sensorVal, touchDetected, onsetTime;
-									// Read the freq bus value
-										freqVal = pollOutBus.get;
-									samples[i] = freqVal;
-									lastFreqVal = freqVal;
-									hasLastFreq = true;
-									
-									// Check if this is a touch onset using the sensor values buffer
-									// Touch onset: sensor crossing 0.98 from below
-										sensorVal = sensorValues[sensorIndex];
-										touchDetected = false;
-									if (sensorVal >= settings[\thresholdTouch] and: { lastSensorVal < settings[\thresholdTouch] }) {
-										touchDetected = true;
-									};
-									lastSensorVal = sensorVal;
-									sensorIndex = sensorIndex + 1;
-									
-									if (touchDetected) {
-										// This is a touch onset - log the freq value
-										onsetTime = (i / pollRate).round(0.001);
-										noteRows.add([soundName, curveName, onsetTime, freqVal.round(0.001)]);
-									};
-									
-									sampleTime.wait;
-								};
-							};
-							freqPoller[\routine] = pollRoutine.fork;
-						};
+						
 						
 						traj[\dur].wait;
 						event.("proximity_curve_end");
 
 						// Stop freq poller
-						if (freqPoller.notNil) {
-							try { freqPoller[\routine].stop };
 							try { freqPoller[\synth].free };
 							try { freqPoller[\bus].free };
 						};
