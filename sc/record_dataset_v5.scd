@@ -297,11 +297,7 @@ File.mkdir(folder +/+ "proximity_curves");
 						traj[\dur].wait;
 						event.("proximity_curve_end");
 
-						// Stop freq poller
-							try { freqPoller[\synth].free };
-							try { freqPoller[\bus].free };
-						};
-						
+
 						settings[\tail].wait;
 						event.("recording_end");
 						recorder.stopRecording;
