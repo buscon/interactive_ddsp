@@ -344,6 +344,7 @@ File.mkdir(folder +/+ "proximity_curves");
 								};
 							};
 							writeEvents.value;
+							writeNotes.value;
 							writeManifest.value;
 						};
 					};
