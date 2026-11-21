@@ -134,6 +134,66 @@ def compute_spectral_centroid_envelope(audio, frame_size=2048, hop=480, sr=48000
     return centroids
 
 
+def _estimate_f0_autocorr(x, sr=48000, fmin=50.0, fmax=500.0):
+    """Autocorrelation f0 estimate on a short window; None if unvoiced/quiet."""
+    x = np.asarray(x, dtype=np.float64)
+    x = x - x.mean()
+    if np.sqrt((x**2).mean()) < 1e-3:
+        return None
+    ac = np.correlate(x, x, mode='full')[len(x)-1:]
+    if ac[0] <= 0:
+        return None
+    ac = ac / ac[0]
+    lo, hi = int(sr / fmax), int(sr / fmin)
+    lo = max(lo, 1); hi = min(hi, len(ac) - 1)
+    if hi <= lo:
+        return None
+    lag = lo + int(np.argmax(ac[lo:hi]))
+    if ac[lag] < 0.3:
+        return None
+    return sr / lag
+
+def compute_touch_onset_f0_error(pred, target, touch_time, sr=48000, window_s=0.5):
+    """Mean |f0 error| in cents over the first window_s after each touch onset."""
+    min_len = min(len(pred), len(target))
+    pred, target = pred[:min_len], target[:min_len]
+    tt = touch_time[:len(pred) // 100 + 1] if len(touch_time) > len(pred) // 100 else touch_time
+    tt = np.resize(touch_time, (min_len + 99) // 100)[: (min_len // 100) + 1]
+    onsets = [i for i in range(1, len(tt)) if tt[i] > 0 and tt[i-1] == 0]
+    if tt[0] > 0:
+        onsets.insert(0, 0)
+    W = int(window_s * sr)
+    errs = []
+    for o in onsets:
+        a0 = o * 100 * 480  # frame(100Hz) -> samples (block 480)
+        a1 = min(a0 + W, min_len)
+        if a1 - a0 < W // 2:
+            continue
+        f_p = _estimate_f0_autocorr(pred[a0:a1], sr)
+        f_t = _estimate_f0_autocorr(target[a0:a1], sr)
+        if f_p and f_t:
+            errs.append(abs(1200 * np.log2(f_p / f_t)))
+    return float(np.mean(errs)) if errs else None
+
+def compute_sustained_touch_corr(pred, target, touch_time, sr=48000):
+    """Pearson corr of log-RMS envelopes over samples where touch_time > 2 s."""
+    from scipy.stats import pearsonr as _pr
+    min_len = min(len(pred), len(target))
+    pred, target = pred[:min_len], target[:min_len]
+    n_blocks = min_len // 480
+    mask = (touch_time[:n_blocks] > 2.0)
+    if mask.sum() < 4:
+        return None
+    idx = np.repeat(mask, 480)[:min_len]
+    def env(x):
+        e = np.array([np.sqrt(np.mean(x[i*480:(i+1)*480]**2) + 1e-12) for i in range(n_blocks)])
+        return np.log(e + 1e-4)
+    ep, et = env(pred), env(target)
+    m = mask
+    if m.sum() < 4:
+        return None
+    return float(_pr(ep[m], et[m])[0])
+
 def compute_metrics_with_same_len(pred, target, scales, overlap, device='cpu'):
     """Compute metrics ensuring pred and target have same length."""
     # Pad or truncate to same length
@@ -354,6 +414,8 @@ def main():
             target_rms_val = np.sqrt(np.mean(audio**2))
             rms_ratio = pred_rms_val / (target_rms_val + 1e-8)
             
+            onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch)
+            sustained_corr = compute_sustained_touch_corr(pred, audio, touch)
             metrics = {
                 "sound": sound,
                 "curve": curve,
@@ -361,6 +423,8 @@ def main():
                 "rms_envelope_corr": rms_corr if not np.isnan(rms_corr) else 0,
                 "centroid_corr": centroid_corr if not np.isnan(centroid_corr) else 0,
                 "rms_ratio": rms_ratio,
+                "touch_onset_f0_err_cents": onset_f0_err if onset_f0_err is not None else -1.0,
+                "sustained_touch_corr": sustained_corr if sustained_corr is not None else -1.0,
             }
             all_metrics.append(metrics)
             metrics_by_sound[sound].append(metrics)
