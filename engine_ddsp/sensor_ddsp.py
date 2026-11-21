@@ -89,7 +89,7 @@ class SensorDDSP(nn.Module):
         # Heads
         self.harmonic_head = nn.Linear(hidden_size, n_harmonic + 1)
         self.noise_head = nn.Linear(hidden_size, n_bands)
-        self.f0_head = nn.Linear(hidden_size + 1, 1)  # +1 for touch_onset
+        self.f0_head = nn.Linear(hidden_size + 2, 1)  # +1 touch_onset, +1 touch_time (normalised)
         
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
@@ -169,13 +169,14 @@ class SensorDDSP(nn.Module):
         # Heads
         harmonic_param = self.harmonic_head(mlp_out)  # (B, T, n_harmonic+1)
         noise_param = self.noise_head(mlp_out)        # (B, T, n_bands)
-        f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset], dim=-1))  # (B, T, 1)
+        f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch], dim=-1))  # (B, T, 1)
         
         # Compute f0 per frame
         # f0 = f0_base[sound_id] * 2^(max_f0_octaves * tanh(f0_deviation))
         f0_base_sound = self.f0_base[sound_id]  # (B,)
         f0_base = f0_base_sound.unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
         f0 = f0_base * (2 ** (self.max_f0_octaves * torch.tanh(f0_deviation)))  # (B, T, 1)
+        self._last_f0 = f0.detach() if not torch.is_grad_enabled() else f0  # stash for f0 loss
         
         # Apply scale function to harmonic params
         harmonic_param = scale_function(harmonic_param)
@@ -286,6 +287,45 @@ class SensorDDSP(nn.Module):
             loss = loss + diff.sum() / denom
         return loss / len(scales)
 
+    def estimate_f0_track(self, target, win=2048, fmin=50.0, fmax=500.0):
+        """
+        Self-supervised per-block f0 estimate from target audio via autocorrelation.
+        target: (B, L) -> f0 (B, T) with T = L // block_size; NaN where unvoiced.
+        """
+        B, L = target.shape
+        T = L // self.block_size
+        x = target[:, :T * self.block_size].view(B, T, self.block_size)
+        # widen window by unfolding neighbour blocks: use win samples centered per block
+        pad = (win - self.block_size) // 2
+        xp = torch.nn.functional.pad(target, (pad, pad + (win - self.block_size) - pad))
+        # gather windows: (B, T, win)
+        idx = torch.arange(T, device=target.device) * self.block_size + pad
+        w = torch.stack([xp[:, i:i + win] for i in idx], dim=1)  # (B, T, win)
+        w = w - w.mean(dim=-1, keepdim=True)
+        spec = torch.fft.rfft(w, n=2 * win, dim=-1)
+        ac = torch.fft.irfft(spec * spec.conj(), n=2 * win, dim=-1)[..., :win]
+        ac = ac / (ac[..., :1] + 1e-8)
+        lo = max(int(self.sampling_rate / fmax), 1)
+        hi = min(int(self.sampling_rate / fmin), win - 1)
+        seg = ac[..., lo:hi]
+        best = torch.argmax(seg, dim=-1) + lo  # (B, T)
+        peak = torch.gather(ac, -1, best.unsqueeze(-1)).squeeze(-1)
+        rms = x.pow(2).mean(dim=-1).sqrt()
+        voiced = (peak > 0.3) & (rms > 1e-3)
+        f0 = self.sampling_rate / best.float()
+        f0 = torch.where(voiced, f0, torch.full_like(f0, float('nan')))
+        return f0
+
+    def f0_regression_loss(self, f0_pred, target):
+        """L1 in octaves between predicted and target-estimated f0 on voiced blocks."""
+        f0_t = self.estimate_f0_track(target)  # (B, T), NaN unvoiced
+        f0_p = f0_pred.squeeze(-1)  # (B, T)
+        mask = ~torch.isnan(f0_t)
+        if mask.sum() == 0:
+            return f0_pred.sum() * 0.0
+        err = (torch.log2(f0_p[mask]) - torch.log2(f0_t[mask])).abs().mean()
+        return err
+
     def loss_curriculum(self, pred, target, scales, overlap, step, ramp0=150, ramp1=400, touch=None, sound_id=None):
         """
         Curriculum loss with linear weight on spectral loss and RMS envelope loss.
@@ -343,10 +383,14 @@ class SensorDDSP(nn.Module):
 
         total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
 
-        # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.2x
+        # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.5x
         if sound_id is not None:
             comb = self.harmonic_comb_loss(pred, target, sound_id, scales, overlap)
-            total = total + 0.2 * w * comb
+            total = total + 0.5 * w * comb
+            # Self-supervised f0 regression (target-derived f0 track), weight 1.0x ramped
+            f0_pred = getattr(self, '_last_f0', None)
+            if f0_pred is not None and f0_pred.shape[1] == target.shape[1] // self.block_size:
+                total = total + 1.0 * w * self.f0_regression_loss(f0_pred, target)
 
         return total
 
