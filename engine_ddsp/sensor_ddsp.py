@@ -207,6 +207,8 @@ class SensorDDSP(nn.Module):
         phase = torch.cumsum(rate.unsqueeze(1) / 100.0, dim=1)  # (B, T) cycles
         lfo = 1.0 + in_touch * depth.unsqueeze(1) * torch.sin(2 * torch.pi * phase)
         f0 = f0 * lfo
+        # Clamp f0 to valid range to prevent NaN from log2 or overflow
+        f0 = torch.clamp(f0, 20.0, 2000.0)
         self._last_f0 = f0.detach() if not torch.is_grad_enabled() else f0  # stash for f0 loss
         
         # Apply scale function to harmonic params
@@ -357,9 +359,15 @@ class SensorDDSP(nn.Module):
         """L1 in octaves between predicted and target-estimated f0 on voiced blocks."""
         f0_t = self.estimate_f0_track(target)  # (B, T), NaN unvoiced
         f0_p = f0_pred.squeeze(-1)  # (B, T)
+        # Clamp f0 values to valid range and replace NaN with safe value
+        f0_p = torch.nan_to_num(f0_p, nan=100.0, posinf=2000.0, neginf=20.0)
+        f0_t = torch.nan_to_num(f0_t, nan=100.0, posinf=2000.0, neginf=20.0)
+        # Clamp to valid f0 range
+        f0_p = torch.clamp(f0_p, 20.0, 2000.0)
+        f0_t = torch.clamp(f0_t, 20.0, 2000.0)
         mask = ~torch.isnan(f0_t)
         if mask.sum() == 0:
-            return f0_pred.sum() * 0.0
+            return (f0_p * 0.0).mean()
         err = (torch.log2(f0_p[mask]) - torch.log2(f0_t[mask])).abs().mean()
         return err
 
@@ -431,6 +439,9 @@ class SensorDDSP(nn.Module):
                 tm = (te * sustained).sum(1) / ws
                 ps = (((pe - pm.unsqueeze(1)) ** 2) * sustained).sum(1) / ws
                 ts = (((te - tm.unsqueeze(1)) ** 2) * sustained).sum(1) / ws
+                # Guard against zero variance (sqrt of near-zero can cause NaN propagation)
+                ps = torch.clamp(ps, min=1e-8)
+                ts = torch.clamp(ts, min=1e-8)
                 total = total + 1.0 * w * (ps.sqrt() - ts.sqrt()).abs().mean()
 
         # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
