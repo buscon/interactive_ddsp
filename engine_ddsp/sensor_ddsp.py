@@ -554,8 +554,8 @@ class SensorDDSP(nn.Module):
             return (pred * 0.0).mean()
         
         # Energy in modulation band
-        pred_energy = (pred_fft.real**2 + pred_fft.imag**2)[:, mask_band].sum()
-        target_energy = (target_fft.real**2 + target_fft.imag**2)[:, mask_band].sum()
+        pred_energy = (pred_fft.real**2 + pred_fft.imag**2)[:, mask_band].sum() / (n_fft * B)
+        target_energy = (target_fft.real**2 + target_fft.imag**2)[:, mask_band].sum() / (n_fft * B)
         
         # L1 mismatch
         return (pred_energy - target_energy).abs().mean()
