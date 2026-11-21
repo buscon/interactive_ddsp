@@ -173,7 +173,7 @@ writeEvents = {
 writeNotes = {
 	File.use((folder +/+ "notes.csv").standardizePath, "w", { arg file;
 		file.write("sound,curve,onset_time_s,freq_hz\n");
-		noteRows.do { arg r; file.write("%_%_%\n".format(r[0], r[1], r[2], r[3])) };
+		noteRows.do { arg r; file.write("%,%,%,%\n".format(r[0], r[1], r[2], r[3])) };
 	});
 };
 
