@@ -205,14 +205,14 @@ class AlignedChunkDataset(Dataset):
             sensor_chunk = np.pad(sensor_chunk, (0, pad_frames), mode="constant")
             touch_chunk = np.pad(touch_chunk, (0, pad_frames), mode="constant")
         
-        # Touch features: log1p(t/30) and exp(-t/30/0.5), each clipped to [0, ~10]
+        # Touch features: log1p(t), exp(-t/0.5), clip(t,0,40) where t = raw touch_time seconds
         # t_sec = touch_time in seconds (touch_time is already in seconds from 0..~30)
         t_sec = touch_chunk
         touch_feature_1 = np.log1p(t_sec)  # log1p(t_sec)
         touch_feature_2 = np.exp(-t_sec / 0.5)  # exp(-t_sec/0.5)
-        # Stack and clip to [0, ~10]
-        touch = np.stack([touch_feature_1, touch_feature_2], axis=-1)
-        touch = np.clip(touch, 0.0, 10.0)
+        touch_feature_3 = np.clip(t_sec, 0.0, 40.0)  # clip(t_sec, 0, 40)
+        # Stack to 3 features
+        touch = np.stack([touch_feature_1, touch_feature_2, touch_feature_3], axis=-1)
         
         return {
             "audio": audio_chunk.astype(np.float32),
@@ -237,12 +237,12 @@ class AlignedChunkDataset(Dataset):
                 audio = f["audio"]
                 sensor = f["sensor"]
                 touch_time = f["touch_time"]
-                # Touch features: log1p(t/30) and exp(-t/30/0.5)
+                # Touch features: log1p(t), exp(-t/0.5), clip(t,0,40) where t = raw touch_time seconds
                 t_sec = touch_time
                 touch_feature_1 = np.log1p(t_sec)
                 touch_feature_2 = np.exp(-t_sec / 0.5)
-                touch = np.stack([touch_feature_1, touch_feature_2], axis=-1)
-                touch = np.clip(touch, 0.0, 10.0)
+                touch_feature_3 = np.clip(t_sec, 0.0, 40.0)
+                touch = np.stack([touch_feature_1, touch_feature_2, touch_feature_3], axis=-1)
                 return {
                     "audio": audio,
                     "sensor": sensor,

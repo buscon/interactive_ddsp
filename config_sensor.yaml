@@ -20,6 +20,14 @@ model:
   max_f0_octaves: 2.0
   # f0 roots from Sentire SC sources (sound_id order: canopy, forestPad, swarm, percussion, moss)
   f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+  
+  # v5: LFO base tables (per sound) - from SC sources
+  # canopy: rate=1+clip(0.3t,1,30), depth_add=0.5t clip 0..20 (additive FM)
+  # swarm: rate=0.1+0.03t, depth_mul=(0.3+0.8t)% multiplicative
+  # forestPad/moss/percussion: no LFO
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
 
 train:
   batch: 8

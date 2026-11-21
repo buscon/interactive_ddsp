@@ -71,31 +71,43 @@ class SensorDDSP(nn.Module):
             torch.tensor(f0_base_hz, dtype=torch.float32)
         )
         
-        # Input MLPs for sensor (1->hidden) and touch (2->hidden, log1p/decay features)
+        # Input MLPs for sensor (1->hidden) and touch (3->hidden, log1p/decay/clip features)
         self.mlp_sensor = _mlp(1, hidden_size, hidden_size, n_layers=2)
-        self.mlp_touch = _mlp(2, hidden_size, hidden_size, n_layers=2)
+        self.mlp_touch = _mlp(3, hidden_size, hidden_size, n_layers=2)
         
         # Sound embedding
         self.sound_emb = nn.Embedding(n_sounds, sound_emb_dim)
-        # per-sound LFO (vibrato/FM) gated by touch: rate Hz, depth (fraction of f0)
-        self.lfo_rate = nn.Embedding(n_sounds, 1)
-        self.lfo_depth = nn.Embedding(n_sounds, 1)
-        nn.init.uniform_(self.lfo_rate.weight, 0.5, 6.0)
-        nn.init.uniform_(self.lfo_depth.weight, 0.0, 0.02)
+        
+        # per-sound LFO (vibrato/FM) gated by touch
+        # Base rate/depth tables from SC sources (per sound: canopy, forestPad, swarm, percussion, moss)
+        # canopy: rate=1+clip(0.3t,1,30), depth_add=0.5t clip 0..20 (additive FM)
+        # swarm: rate=0.1+0.03t, depth_mul=(0.3+0.8t)% multiplicative
+        # forestPad/moss/percussion: no LFO
+        self.register_buffer("lfo_rate_base", torch.tensor([1.0, 0.0, 0.1, 0.0, 0.0], dtype=torch.float32))
+        self.register_buffer("lfo_depth_mul_base", torch.tensor([0.0, 0.0, 0.3, 0.0, 0.0], dtype=torch.float32))
+        self.register_buffer("lfo_depth_add_base", torch.tensor([20.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float32))
+        
+        # Residual embeddings for LFO (small init)
+        self.lfo_rate_emb = nn.Embedding(n_sounds, 1)
+        self.lfo_depth_mul_emb = nn.Embedding(n_sounds, 1)
+        self.lfo_depth_add_emb = nn.Embedding(n_sounds, 1)
+        nn.init.uniform_(self.lfo_rate_emb.weight, -0.01, 0.01)
+        nn.init.uniform_(self.lfo_depth_mul_emb.weight, -0.01, 0.01)
+        nn.init.uniform_(self.lfo_depth_add_emb.weight, -0.01, 0.01)
         
         # Input to GRU: sensor_mlp + touch_mlp + emb = hidden + hidden + sound_emb_dim
         gru_input_dim = hidden_size + hidden_size + sound_emb_dim
         self.gru = nn.GRU(gru_input_dim, hidden_size, batch_first=True)
         
         # Output MLP with skip connection
-        # Input: GRU_out (hidden) + raw sensor (1) + raw touch (2, log1p/decay) + emb (sound_emb_dim) + touch_onset (1)
-        out_mlp_input = hidden_size + 1 + 2 + sound_emb_dim + 1
+        # Input: GRU_out (hidden) + raw sensor (1) + raw touch (3, log1p/decay/clip) + emb (sound_emb_dim) + touch_onset (1)
+        out_mlp_input = hidden_size + 1 + 3 + sound_emb_dim + 1
         self.out_mlp = _mlp(out_mlp_input, hidden_size, hidden_size, n_layers=2)
 
         # Heads
         self.harmonic_head = nn.Linear(hidden_size, n_harmonic + 1)
         self.noise_head = nn.Linear(hidden_size, n_bands)
-        self.f0_head = nn.Linear(hidden_size + 1 + 2, 1)  # +1 touch_onset, +2 touch features
+        self.f0_head = nn.Linear(hidden_size + 1 + 3, 1)  # +1 touch_onset, +3 touch features
         
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
@@ -154,14 +166,14 @@ class SensorDDSP(nn.Module):
             touch_onset[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
             touch_onset[..., 0, :] = (t_ch[..., 0, :] > 0).float()
 
-        # touch may arrive as (B,T,1) legacy normalised seconds/30 — expand to 2 features
+        # touch may arrive as (B,T,1) legacy normalised seconds/30 — expand to 3 features
         if touch.shape[-1] == 1:
             t_sec = touch * 30.0
-            touch = torch.cat([torch.log1p(t_sec), torch.exp(-t_sec / 0.5)], dim=-1)
+            touch = torch.cat([torch.log1p(t_sec), torch.exp(-t_sec / 0.5), torch.clamp(t_sec, 0, 40)], dim=-1)
 
         # Process sensor and touch through MLPs
         sensor_mlp = self.mlp_sensor(sensor)  # (B, T, hidden)
-        touch_mlp = self.mlp_touch(touch)      # (B, T, 2 -> hidden)
+        touch_mlp = self.mlp_touch(touch)      # (B, T, 3 -> hidden)
         
         # Sound embedding broadcast over time
         emb = self.sound_emb(sound_id)         # (B, sound_emb_dim)
@@ -176,7 +188,7 @@ class SensorDDSP(nn.Module):
         # Output MLP with skip connection
         # Skip: raw sensor, raw touch, emb
         sensor_raw = sensor  # (B, T, 1)
-        touch_raw = touch    # (B, T, 1)
+        touch_raw = touch    # (B, T, 3)
         emb_skip = emb       # (B, T, sound_emb_dim)
         
         mlp_in = torch.cat([gru_out, sensor_raw, touch_raw, emb_skip, touch_onset], dim=-1)
@@ -199,14 +211,38 @@ class SensorDDSP(nn.Module):
             note = torch.zeros_like(f0_base)
         note_f0 = torch.where(note > 0, note, f0_base)  # (B, T, 1)
         f0 = note_f0 * (2 ** (self.max_f0_octaves * torch.tanh(f0_deviation)))  # (B, T, 1)
-        # v4: per-sound LFO gated by touch (phase accumulated over blocks at control rate)
-        t_ch = touch[..., :1]
-        in_touch = (t_ch > 0).float()
-        rate = torch.sigmoid(self.lfo_rate(sound_id)) * 6.0  # (B,1) Hz
-        depth = torch.sigmoid(self.lfo_depth(sound_id)) * 0.05  # (B,1)
-        phase = torch.cumsum(rate.unsqueeze(1) / 100.0, dim=1)  # (B, T) cycles
-        lfo = 1.0 + in_touch * depth.unsqueeze(1) * torch.sin(2 * torch.pi * phase)
-        f0 = f0 * lfo
+        # v5: hybrid per-sound LFO with base tables + residual embeddings
+        t_ch = touch[..., :1]  # log1p feature for touch detection
+        in_touch = (t_ch > 0).float()  # (B, T, 1)
+        
+        # Per-sound base rate/depth + residual embeddings
+        # lfo_rate_base is (5,) - per-sound scalar
+        # lfo_rate_emb is (5, 1) - per-sound 1-dim embedding
+        # sound_id is (B,) -> indexing gives (B,)
+        rate_base = self.lfo_rate_base[sound_id]  # (B,)
+        rate_emb = self.lfo_rate_emb(sound_id).squeeze(-1)  # (B, 1) -> (B,)
+        rate = rate_base + rate_emb  # (B,), rate in Hz
+        
+        depth_mul_base = self.lfo_depth_mul_base[sound_id]  # (B,)
+        depth_mul_emb = self.lfo_depth_mul_emb(sound_id).squeeze(-1)  # (B,)
+        depth_mul = depth_mul_base + depth_mul_emb  # (B,), multiplicative depth
+        
+        depth_add_base = self.lfo_depth_add_base[sound_id]  # (B,)
+        depth_add_emb = self.lfo_depth_add_emb(sound_id).squeeze(-1)  # (B,)
+        depth_add = depth_add_base + depth_add_emb  # (B,), additive depth (Hz)
+        
+        # Phase accumulation: rate in Hz, converted to per-frame phase increment
+        # rate is (B,) - need to broadcast to (B, T) for per-frame accumulation
+        rate_broadcast = rate.unsqueeze(-1).expand(-1, T)  # (B, 1) -> (B, T)
+        phase = torch.cumsum(rate_broadcast / 100.0, dim=1)  # (B, T) cycles
+        sin_phase = torch.sin(2 * torch.pi * phase)  # (B, T)
+        
+        # Hybrid LFO: f0 *= (1 + depth_mul * sin) + depth_add * sin
+        # depth_mul and depth_add are (B,) - unsqueeze to (B, 1, 1) for proper broadcasting
+        f0 = f0 * (1.0 + in_touch * depth_mul.unsqueeze(-1).unsqueeze(-1) * sin_phase.unsqueeze(-1))
+        # Additive FM component
+        f0 = f0 + in_touch * depth_add.unsqueeze(-1).unsqueeze(-1) * sin_phase.unsqueeze(-1)
+        
         # Clamp f0 to valid range to prevent NaN from log2 or overflow
         f0 = torch.clamp(f0, 20.0, 2000.0)
         self._last_f0 = f0.detach() if not torch.is_grad_enabled() else f0  # stash for f0 loss
@@ -444,6 +480,21 @@ class SensorDDSP(nn.Module):
                 ts = torch.clamp(ts, min=1e-8)
                 total = total + 1.0 * w * (ps.sqrt() - ts.sqrt()).abs().mean()
 
+        # v5: modulation spectrum loss (match dominant modulation frequency in 0.1-10 Hz band)
+        if touch is not None and touch.shape[-1] >= 3:
+            mod_spec = self.mod_spec_loss(pred, target, touch)
+            total = total + 10.0 * w * mod_spec
+
+        # v5: attack loss (short-window STFT weighted after touch_onset)
+        # Derive touch_onset from touch (first channel is log1p(t) which > 0 iff t > 0)
+        if touch is not None and touch.shape[-1] >= 3:
+            t_ch = touch[..., :1]
+            touch_onset_from_touch = torch.zeros_like(t_ch)
+            touch_onset_from_touch[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
+            touch_onset_from_touch[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+            atk_loss = self.attack_loss(pred, target, touch_onset_from_touch, step)
+            total = total + 5.0 * w * atk_loss
+
         # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
         if sound_id is not None:
             comb = self.harmonic_comb_loss(pred, target, sound_id, scales, overlap)
@@ -454,6 +505,131 @@ class SensorDDSP(nn.Module):
                 total = total + 1.0 * w * self.f0_regression_loss(f0_pred, target)
 
         return total
+
+    def mod_spec_loss(self, pred, target, touch):
+        """
+        Phase-invariant modulation spectrum loss.
+        Match dominant modulation frequency (0.1-10 Hz) in log-RMS envelope.
+        
+        Args:
+            pred: (B, L) predicted audio
+            target: (B, L) target audio
+            touch: (B, T, 3) touch features at 100 Hz frame rate
+            
+        Returns:
+            scalar loss (modulation spectrum mismatch)
+        """
+        # Sustained frames: touch_time > 2 s (first channel: log1p(t) > log1p(2))
+        sustained = (touch[..., 0] > np.log1p(2.0)).float()  # (B, T)
+        
+        if sustained.sum() <= 10:
+            return (pred * 0.0).mean()
+        
+        # Compute log-RMS envelopes
+        pred_log_rms = self.frame_log_rms(pred)  # (B, T)
+        target_log_rms = self.frame_log_rms(target)  # (B, T)
+        
+        B, T = pred_log_rms.shape
+        
+        # Detrend by subtracting mean on sustained frames
+        # For non-sustained frames, use the mean of sustained frames for that batch item
+        pred_sustained_mean = (pred_log_rms * sustained).sum(dim=1, keepdim=True) / (sustained.sum(dim=1, keepdim=True) + 1e-8)
+        target_sustained_mean = (target_log_rms * sustained).sum(dim=1, keepdim=True) / (sustained.sum(dim=1, keepdim=True) + 1e-8)
+        
+        pred_detrended = pred_log_rms - pred_sustained_mean
+        target_detrended = target_log_rms - target_sustained_mean
+        
+        # Zero-pad or truncate to power of 2 for FFT
+        n_fft = min(T, 512)
+        pred_fft = torch.fft.rfft(pred_detrended[:, :n_fft], n=n_fft)
+        target_fft = torch.fft.rfft(target_detrended[:, :n_fft], n=n_fft)
+        
+        # Frequency bins at 100 Hz frame rate: d=0.01s per frame
+        freq_bins = torch.fft.fftfreq(n_fft, d=0.01, device=pred.device)[:n_fft//2+1]
+        
+        # Mask for 0.1-10 Hz band
+        mask_band = (freq_bins >= 0.1) & (freq_bins <= 10.0)
+        
+        if mask_band.sum() == 0:
+            return (pred * 0.0).mean()
+        
+        # Energy in modulation band
+        pred_energy = (pred_fft.real**2 + pred_fft.imag**2)[:, mask_band].sum()
+        target_energy = (target_fft.real**2 + target_fft.imag**2)[:, mask_band].sum()
+        
+        # L1 mismatch
+        return (pred_energy - target_energy).abs().mean()
+
+    def attack_loss(self, pred, target, touch_onset, step):
+        """
+        Attack loss: short-window STFT with weighted frames after touch_onset.
+        
+        Args:
+            pred: (B, L) predicted audio
+            target: (B, L) target audio
+            touch_onset: (B, T, 1) at 100 Hz frame rate
+            step: current training step (0-500 for ramp)
+            
+        Returns:
+            scalar loss
+        """
+        # Short window STFT: win=9600 (200ms), hop=2400 (50% overlap)
+        win = 9600
+        hop = 2400
+        scales = [win]
+        overlap = 1.0 - hop / win  # 0.75
+        
+        pred_stft = multiscale_fft(pred, scales, overlap)
+        target_stft = multiscale_fft(target, scales, overlap)
+        
+        # multiscale_fft returns a list of (B, freqs, frames) tensors (PyTorch stft order)
+        # We only have one scale, so we take the first element
+        pred_stft = pred_stft[0]  # (B, freqs, frames)
+        target_stft = target_stft[0]  # (B, freqs, frames)
+        
+        # Frame weight ramp: 1 -> 3 over steps 0-500
+        w = min(1.0, max(0.0, step / 500.0))
+        frame_weight = 1.0 + 2.0 * w  # 1.0 -> 3.0
+        
+        # Weight frames within 200ms (5 frames at 100 Hz) after touch_onset
+        B, _, T_stft_frames = pred_stft.shape  # (B, freqs, frames)
+        
+        # touch_onset is at 100 Hz with T frames, STFT has T_stft_frames frames
+        # We'll downsample touch_onset to match STFT frames
+        T_touch = touch_onset.shape[1]
+        
+        # Compute downsampling factor - average touch_onset over STFT frame windows
+        # STFT frame i (at time i * hop / sr) covers touch frames [i*hop/480, (i+1)*hop/480)
+        # hop = 2400, so each STFT frame covers 2400/480 = 5 touch frames at 100 Hz
+        
+        # For simplicity, we'll downsample by taking every Nth touch frame
+        # where N = T_touch / T_stft_frames (approximately 100/21 ≈ 5)
+        if T_touch > T_stft_frames:
+            # Downsample touch_onset
+            # Touch frame i corresponds to STFT frame i * T_stft_frames / T_touch
+            indices = torch.arange(T_stft_frames, device=pred.device) * T_touch // T_stft_frames
+            touch_onset_up = touch_onset[:, indices, :]  # (B, T_stft_frames, 1)
+        else:
+            touch_onset_up = touch_onset
+        
+        # Create weight mask - frames with touch_onset or within 5 frames after
+        weights = torch.ones(B, T_stft_frames, device=pred.device)
+        
+        # For each frame with onset, weight subsequent frames
+        for offset in range(6):  # 0 to 5 frames after onset
+            if offset == 0:
+                weights = weights + touch_onset_up.squeeze(-1) * (frame_weight - 1.0)
+            else:
+                shifted = torch.nn.functional.pad(touch_onset_up.squeeze(-1)[:, :-offset], (offset, 0), value=0)
+                weights = weights + shifted * (frame_weight - 1.0) / 2.0
+        
+        # Apply weights to STFT frames - need to match the frames dimension
+        # pred_stft is (B, freqs, frames), weights is (B, frames)
+        weights_expanded = weights.unsqueeze(1)  # (B, 1, frames)
+        weighted_loss = (pred_stft - target_stft).abs() * weights_expanded
+        weighted_loss = weighted_loss.mean()
+        
+        return w * weighted_loss
 
     def silence_loss(self, target, scales, overlap):
         """
