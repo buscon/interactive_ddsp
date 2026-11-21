@@ -414,8 +414,9 @@ def main():
             target_rms_val = np.sqrt(np.mean(audio**2))
             rms_ratio = pred_rms_val / (target_rms_val + 1e-8)
             
-            onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch)
-            sustained_corr = compute_sustained_touch_corr(pred, audio, touch)
+            touch_time_raw = touch * 30.0  # denormalise (clip(t/30,0,2))
+            onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch_time_raw)
+            sustained_corr = compute_sustained_touch_corr(pred, audio, touch_time_raw)
             metrics = {
                 "sound": sound,
                 "curve": curve,
