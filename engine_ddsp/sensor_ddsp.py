@@ -310,8 +310,14 @@ class SensorDDSP(nn.Module):
         seg = ac[..., lo:hi]
         best = torch.argmax(seg, dim=-1) + lo  # (B, T)
         peak = torch.gather(ac, -1, best.unsqueeze(-1)).squeeze(-1)
+        # Compute local std of ac peak over ±3 blocks for variance measure
+        # Pad peak on the TIME dim: (B, T + 6)
+        peak_padded = torch.nn.functional.pad(peak, (3, 3), mode='replicate')  # (B, T+6)
+        # Unfold to get windows of ±3 blocks: (B, T, 7)
+        local_windows = peak_padded.unfold(dimension=1, size=7, step=1)  # (B, T, 7)
+        local_std = local_windows.std(dim=-1)  # (B, T)
         rms = x.pow(2).mean(dim=-1).sqrt()
-        voiced = (peak > 0.3) & (rms > 1e-3)
+        voiced = (peak > 0.6) & (rms > 1e-3) & (local_std < 0.1)
         f0 = self.sampling_rate / best.float()
         f0 = torch.where(voiced, f0, torch.full_like(f0, float('nan')))
         return f0
@@ -355,7 +361,7 @@ class SensorDDSP(nn.Module):
             hop = int(s * (1 - overlap))
             block = self.block_size
             idx = torch.clamp((torch.arange(n_frames, device=device) * hop) // block, max=touch.shape[1] - 1)
-            w = 1.0 + 0.5 * (touch[:, idx, 0] > 2.0).float()  # (B, frames)
+            w = 1.0 + 0.5 * (touch[:, idx, 0] > 2.0/30.0).float()  # (B, frames)
             return w.unsqueeze(-1)  # (B, frames, 1)
 
         lin_loss = 0.0
@@ -383,10 +389,10 @@ class SensorDDSP(nn.Module):
 
         total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
 
-        # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.5x
+        # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
         if sound_id is not None:
             comb = self.harmonic_comb_loss(pred, target, sound_id, scales, overlap)
-            total = total + 0.5 * w * comb
+            total = total + 0.0 * w * comb
             # Self-supervised f0 regression (target-derived f0 track), weight 1.0x ramped
             f0_pred = getattr(self, '_last_f0', None)
             if f0_pred is not None and f0_pred.shape[1] == target.shape[1] // self.block_size:

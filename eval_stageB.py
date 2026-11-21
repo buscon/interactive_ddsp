@@ -134,6 +134,44 @@ def compute_spectral_centroid_envelope(audio, frame_size=2048, hop=480, sr=48000
     return centroids
 
 
+def compute_hf_ratio(audio, sr=48000, cutoff=6000.0):
+    """Compute log-energy above cutoff frequency over total log-energy."""
+    frame_size = 2048
+    hop = 480
+    n_frames = (len(audio) - frame_size) // hop + 1
+    hf_ratios = []
+    for i in range(n_frames):
+        frame = audio[i*hop:i*hop+frame_size]
+        frame = frame * np.hanning(frame_size)
+        spectrum = np.abs(np.fft.rfft(frame))
+        freqs = np.fft.rfftfreq(frame_size, 1/sr)
+        # Total energy
+        total_energy = (spectrum**2).sum() + 1e-12
+        # High-frequency energy (above cutoff)
+        hf_mask = freqs > cutoff
+        hf_energy = (spectrum[hf_mask]**2).sum() + 1e-12
+        # Log-energy ratio
+        hf_ratios.append(np.log(hf_energy / total_energy + 1e-8))
+    return np.mean(hf_ratios)
+
+
+def compute_mod_depth(audio, touch_time_raw, sr=48000):
+    """Compute std of log-RMS envelope over frames where touch_time_raw > 2 s."""
+    frame_size = 480
+    hop = 480
+    n_blocks = len(audio) // frame_size
+    touch_time = touch_time_raw[:n_blocks] if len(touch_time_raw) > n_blocks else touch_time_raw
+    mask = (touch_time > 2.0)
+    if mask.sum() < 4:
+        return 0.0
+    rms = np.zeros(n_blocks)
+    for i in range(n_blocks):
+        frame = audio[i*hop:(i+1)*hop]
+        rms[i] = np.sqrt(np.mean(frame**2) + 1e-12)
+    log_rms = np.log(rms + 1e-8)
+    return np.std(log_rms[mask])
+
+
 def _estimate_f0_autocorr(x, sr=48000, fmin=50.0, fmax=500.0):
     """Autocorrelation f0 estimate on a short window; None if unvoiced/quiet."""
     x = np.asarray(x, dtype=np.float64)
@@ -417,6 +455,11 @@ def main():
             touch_time_raw = touch * 30.0  # denormalise (clip(t/30,0,2))
             onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch_time_raw)
             sustained_corr = compute_sustained_touch_corr(pred, audio, touch_time_raw)
+            # New metrics: HF ratio (log-energy above 6kHz over total) and mod depth (std of log-RMS where touch>2s)
+            hf_ratio_pred = compute_hf_ratio(pred)
+            hf_ratio_tgt = compute_hf_ratio(audio)
+            mod_depth_pred = compute_mod_depth(pred, touch_time_raw)
+            mod_depth_tgt = compute_mod_depth(audio, touch_time_raw)
             metrics = {
                 "sound": sound,
                 "curve": curve,
@@ -426,6 +469,10 @@ def main():
                 "rms_ratio": rms_ratio,
                 "touch_onset_f0_err_cents": onset_f0_err if onset_f0_err is not None else -1.0,
                 "sustained_touch_corr": sustained_corr if sustained_corr is not None else -1.0,
+                "hf_ratio_pred": hf_ratio_pred,
+                "hf_ratio_tgt": hf_ratio_tgt,
+                "mod_depth_pred": mod_depth_pred,
+                "mod_depth_tgt": mod_depth_tgt,
             }
             all_metrics.append(metrics)
             metrics_by_sound[sound].append(metrics)
@@ -480,12 +527,12 @@ def main():
             print(f"      Ablation zero: MS loss={multiscale_abl_zero:.4f}, RMS corr vs normal={rms_corr_abl_zero:.4f}")
             print(f"      Ablation rolled: MS loss={multiscale_abl_rolled:.4f}, RMS corr vs normal={rms_corr_abl_rolled:.4f}")
             
-            # Save ablation results
+            # Save ablation results with SAME common_gain as pred/target dry (no per-file peak normalization)
             abl_zero_path = os.path.join(args.out, f"{sound}_{curve}_pred_abl_zero.wav")
             abl_rolled_path = os.path.join(args.out, f"{sound}_{curve}_pred_abl_rolled.wav")
             
-            sf.write(abl_zero_path, pred_abl_zero / (np.abs(pred_abl_zero).max() + 1e-8), 48000, subtype='PCM_16')
-            sf.write(abl_rolled_path, pred_abl_rolled / (np.abs(pred_abl_rolled).max() + 1e-8), 48000, subtype='PCM_16')
+            sf.write(abl_zero_path, pred_abl_zero * common_gain, 48000, subtype='PCM_16')
+            sf.write(abl_rolled_path, pred_abl_rolled * common_gain, 48000, subtype='PCM_16')
             
             # Update metrics with ablation
             metrics["multiscale_abl_zero"] = multiscale_abl_zero
@@ -504,6 +551,10 @@ def main():
     overall_mean["rms_corr_abl_zero"] = np.mean([m.get("rms_corr_abl_zero", 0) for m in all_metrics])
     overall_mean["multiscale_abl_rolled"] = np.mean([m.get("multiscale_abl_rolled", 0) for m in all_metrics])
     overall_mean["rms_corr_abl_rolled"] = np.mean([m.get("rms_corr_abl_rolled", 0) for m in all_metrics])
+    overall_mean["hf_ratio_pred"] = np.mean([m.get("hf_ratio_pred", 0) for m in all_metrics])
+    overall_mean["hf_ratio_tgt"] = np.mean([m.get("hf_ratio_tgt", 0) for m in all_metrics])
+    overall_mean["mod_depth_pred"] = np.mean([m.get("mod_depth_pred", 0) for m in all_metrics])
+    overall_mean["mod_depth_tgt"] = np.mean([m.get("mod_depth_tgt", 0) for m in all_metrics])
     
     sound_means = {}
     for sound in sounds:
