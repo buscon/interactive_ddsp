@@ -273,7 +273,7 @@ File.mkdir(folder +/+ "proximity_curves");
 			(settings[\nProximityCurves] * settings[\sounds].size * perFile / 60).round(1)).postln;
 
 		settings[\sounds].do { arg sound;
-			var soundName = sound[0], soundKey = sound[1];
+			var soundName = sound[0], soundKey = sound[1], freqPoller = nil;
 
 			if (SentireSoundEnvironment.all[soundKey].isNil) {
 				"Dataset: sound environment '%' not loaded, skipping %".format(soundKey, soundName).warn;
@@ -346,31 +346,29 @@ File.mkdir(folder +/+ "proximity_curves");
 						// V5: Start freq polling routine
 						// We need to poll the freq bus at control rate (100 Hz)
 						// and detect touch onsets in the sensor signal
-						var freqPoller = nil;
 						if (freqBusIndex.notNil) {
+							var pollRate, pollDur, sampleCount, lastSensorVal, lastFreqVal, hasLastFreq, pollRoutine, pollSynthDef, pollOutBus, pollSynth;
 							// Create a polling routine that:
 							// 1. Polls the freq bus at control rate
 							// 2. Tracks sensor crossings (touch onset at 0.98)
 							// 3. Logs freq value at each touch onset
-							
-							var pollRate = settings[\controlRate];
-							var pollDur = settings[\proximityCurveDur];
-							var sampleCount = (pollDur * pollRate).asInteger;
-							var lastSensorVal = 0.0;
-							var lastFreqVal = 0.0;
-							var hasLastFreq = false;
-							var pollRoutine;
+							pollRate = settings[\controlRate];
+							pollDur = settings[\proximityCurveDur];
+							sampleCount = (pollDur * pollRate).asInteger;
+							lastSensorVal = 0.0;
+							lastFreqVal = 0.0;
+							hasLastFreq = false;
+							pollRoutine;
 							
 							// We'll use a Synth to read from the freq bus and output to a control bus
 							// Then poll that control bus from the language
-							var pollSynthDef = SynthDef(\freqPoller, {
+							pollSynthDef = SynthDef(\freqPoller, {
 								arg freqBus;
 								Out.kr(0, In.kr(freqBus, 1));  // output to bus 0
 							});
 							pollSynthDef.add;
-							
-							var pollOutBus = Bus.control(server, 1);
-							var pollSynth = Synth.after(nil, \freqPoller, [
+							pollOutBus = Bus.control(server, 1);
+							pollSynth = Synth.after(nil, \freqPoller, [
 								\freqBus, freqBusIndex
 							]);
 							
@@ -386,16 +384,17 @@ File.mkdir(folder +/+ "proximity_curves");
 								var sensorIndex = 0;
 								
 								sampleCount.do { arg i;
+									var freqVal, sensorVal, touchDetected, onsetTime;
 									// Read the freq bus value
-									var freqVal = pollOutBus.get;
+										freqVal = pollOutBus.get;
 									samples[i] = freqVal;
 									lastFreqVal = freqVal;
 									hasLastFreq = true;
 									
 									// Check if this is a touch onset using the sensor values buffer
 									// Touch onset: sensor crossing 0.98 from below
-									var sensorVal = sensorValues[sensorIndex];
-									var touchDetected = false;
+										sensorVal = sensorValues[sensorIndex];
+										touchDetected = false;
 									if (sensorVal >= settings[\thresholdTouch] and: { lastSensorVal < settings[\thresholdTouch] }) {
 										touchDetected = true;
 									};
@@ -404,7 +403,7 @@ File.mkdir(folder +/+ "proximity_curves");
 									
 									if (touchDetected) {
 										// This is a touch onset - log the freq value
-										var onsetTime = (i / pollRate).round(0.001);
+										onsetTime = (i / pollRate).round(0.001);
 										noteRows.add([soundName, curveName, onsetTime, freqVal.round(0.001)]);
 									};
 									
