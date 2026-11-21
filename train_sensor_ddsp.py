@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 import soundfile as sf
 
 # Add the project to path for imports
-sys.path.insert(0, "/home/marcello/Documents/interactive_ddsp")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from engine_ddsp.sensor_data import AlignedChunkDataset
 from engine_ddsp.sensor_ddsp import SensorDDSP
@@ -85,7 +85,8 @@ def find_good_chunk(audio, touch_raw, min_touch_seconds=2.0, chunk_s=10.0, sr=48
     
     chunk_audio = audio[480*offset : 480*end_frame]
     chunk_sensor = touch_raw[offset:end_frame]  # Use touch_raw as sensor
-    chunk_touch = np.clip(touch_raw[offset:end_frame] / 30.0, 0.0, 2.0)
+    _t = touch_raw[offset:end_frame]
+    chunk_touch = np.clip(np.stack([np.log1p(_t), np.exp(-_t / 0.5)], axis=-1), 0.0, 10.0)
     
     # Pad if needed
     if len(chunk_audio) < chunk_s * 100 * 480:
@@ -112,7 +113,9 @@ def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
             # Prepare batch
             audio = torch.from_numpy(val_item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
             sensor = torch.from_numpy(val_item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-            touch = torch.from_numpy(val_item["touch"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
+            touch = torch.from_numpy(val_item["touch"][:int(chunk_s * 100)]).unsqueeze(0).to(device)
+            if touch.dim() == 2:
+                touch = touch.unsqueeze(-1)
             sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
             
             pred = model(sensor, touch, sound_id).squeeze(-1)
@@ -143,7 +146,9 @@ def prepare_batch(item, device, chunk_s):
     """Prepare a validation batch."""
     audio = torch.from_numpy(item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
     sensor = torch.from_numpy(item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-    touch = torch.from_numpy(item["touch"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
+    touch = torch.from_numpy(item["touch"][:int(chunk_s * 100)]).unsqueeze(0).to(device)
+    if touch.dim() == 2:
+        touch = touch.unsqueeze(-1)
     sound_id = torch.tensor([item["sound_id"]], dtype=torch.long, device=device)
     return {
         "audio": audio,
@@ -195,6 +200,9 @@ def main():
     # Order by sound_ids integer values
     sound_names = sorted(f0_base_json.keys(), key=lambda k: index["sound_ids"][k])
     f0_base = [f0_base_json[s]["f0_hz"] for s in sound_names]
+    override = config["model"].get("f0_base_hz_override")
+    if override:
+        f0_base = list(override)  # SC-source roots, not pYIN
     print(f" f0_base Hz: {f0_base}")
 
     # Run directory
@@ -238,6 +246,7 @@ def main():
         
         # Create model
         model_config = config["model"].copy()
+        model_config.pop("f0_base_hz_override", None)
         model_config["f0_base_hz"] = f0_base
         model_config["tilt_init"] = True  # Always use tilted init
         model = SensorDDSP(**model_config).to(device)
@@ -390,7 +399,9 @@ def main():
                 # Move to device
                 audio = batch["audio"].to(device)
                 sensor = batch["sensor"].to(device).unsqueeze(-1)
-                touch = batch["touch"].to(device).unsqueeze(-1)
+                touch = batch["touch"].to(device)
+                if touch.dim() == 2:
+                    touch = touch.unsqueeze(-1)  # (B,T,1); dataset may return (B,T,2)
                 sound_id = batch["sound_id"].to(device)
                 
                 # Forward
@@ -624,7 +635,9 @@ def main():
             with torch.no_grad():
                 audio_t = torch.from_numpy(fixed_chunk["audio"]).unsqueeze(0).to(device)
                 sensor_t = torch.from_numpy(fixed_chunk["sensor"]).unsqueeze(0).unsqueeze(-1).to(device)
-                touch_t = torch.from_numpy(fixed_chunk["touch"]).unsqueeze(0).unsqueeze(-1).to(device)
+                touch_t = torch.from_numpy(fixed_chunk["touch"]).unsqueeze(0).to(device)
+                if touch_t.dim() == 2:
+                    touch_t = touch_t.unsqueeze(-1)
                 sound_id_t = torch.tensor([fixed_chunk["sound_id"]], dtype=torch.long, device=device)
                 
                 pred = model(sensor_t, touch_t, sound_id_t).squeeze(0).squeeze(-1)

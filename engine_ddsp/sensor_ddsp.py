@@ -70,9 +70,9 @@ class SensorDDSP(nn.Module):
             torch.tensor(f0_base_hz, dtype=torch.float32)
         )
         
-        # Input MLPs for sensor and touch (each: 1 -> hidden)
+        # Input MLPs for sensor (1->hidden) and touch (2->hidden, log1p/decay features)
         self.mlp_sensor = _mlp(1, hidden_size, hidden_size, n_layers=2)
-        self.mlp_touch = _mlp(1, hidden_size, hidden_size, n_layers=2)
+        self.mlp_touch = _mlp(2, hidden_size, hidden_size, n_layers=2)
         
         # Sound embedding
         self.sound_emb = nn.Embedding(n_sounds, sound_emb_dim)
@@ -82,14 +82,14 @@ class SensorDDSP(nn.Module):
         self.gru = nn.GRU(gru_input_dim, hidden_size, batch_first=True)
         
         # Output MLP with skip connection
-        # Input: GRU_out (hidden) + raw sensor (1) + raw touch (1) + emb (sound_emb_dim) + touch_onset (1)
-        out_mlp_input = hidden_size + 1 + 1 + sound_emb_dim + 1
+        # Input: GRU_out (hidden) + raw sensor (1) + raw touch (2, log1p/decay) + emb (sound_emb_dim) + touch_onset (1)
+        out_mlp_input = hidden_size + 1 + 2 + sound_emb_dim + 1
         self.out_mlp = _mlp(out_mlp_input, hidden_size, hidden_size, n_layers=2)
 
         # Heads
         self.harmonic_head = nn.Linear(hidden_size, n_harmonic + 1)
         self.noise_head = nn.Linear(hidden_size, n_bands)
-        self.f0_head = nn.Linear(hidden_size + 2, 1)  # +1 touch_onset, +1 touch_time (normalised)
+        self.f0_head = nn.Linear(hidden_size + 1 + 2, 1)  # +1 touch_onset, +2 touch features
         
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
@@ -110,6 +110,9 @@ class SensorDDSP(nn.Module):
         # Multiply harmonic_head and noise_head weights by 0.1
         self.harmonic_head.weight.data.mul_(0.1)
         self.noise_head.weight.data.mul_(0.1)
+        
+        # f0_head: clamp pre-activation to [-3, 3] via weight scaling
+        self.f0_head.weight.data.mul_(0.1)
         
         # harmonic_head bias: [-0.98, then -0.05*h for h in 0..n_harmonic-1]
         nh = self.n_harmonic
@@ -139,13 +142,20 @@ class SensorDDSP(nn.Module):
         # Derive binary touch_onset from touch_time if not provided:
         # onset[t] = 1 iff touch[t] > 0 and touch[t-1] == 0 (first frame: onset if touch[0] > 0)
         if touch_onset is None:
-            touch_onset = torch.zeros_like(touch)
-            touch_onset[..., 1:, :] = ((touch[..., 1:, :] > 0) & (touch[..., :-1, :] == 0)).float()
-            touch_onset[..., 0, :] = (touch[..., 0, :] > 0).float()
+            # onset from the touch-seconds feature (first channel; log1p(t)>0 iff t>0)
+            t_ch = touch[..., :1]
+            touch_onset = torch.zeros_like(t_ch)
+            touch_onset[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
+            touch_onset[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+
+        # touch may arrive as (B,T,1) legacy normalised seconds/30 — expand to 2 features
+        if touch.shape[-1] == 1:
+            t_sec = touch * 30.0
+            touch = torch.cat([torch.log1p(t_sec), torch.exp(-t_sec / 0.5)], dim=-1)
 
         # Process sensor and touch through MLPs
         sensor_mlp = self.mlp_sensor(sensor)  # (B, T, hidden)
-        touch_mlp = self.mlp_touch(touch)      # (B, T, hidden)
+        touch_mlp = self.mlp_touch(touch)      # (B, T, 2 -> hidden)
         
         # Sound embedding broadcast over time
         emb = self.sound_emb(sound_id)         # (B, sound_emb_dim)
@@ -170,6 +180,9 @@ class SensorDDSP(nn.Module):
         harmonic_param = self.harmonic_head(mlp_out)  # (B, T, n_harmonic+1)
         noise_param = self.noise_head(mlp_out)        # (B, T, n_bands)
         f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch], dim=-1))  # (B, T, 1)
+        f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)  # keep tanh out of saturation
+        # Clamp pre-activation to [-3, 3] for un-saturated tanh
+        f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)
         
         # Compute f0 per frame
         # f0 = f0_base[sound_id] * 2^(max_f0_octaves * tanh(f0_deviation))
