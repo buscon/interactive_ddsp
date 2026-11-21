@@ -219,7 +219,7 @@ class AlignedChunkDataset(Dataset):
             "sensor": sensor_chunk,
             "touch": touch,
             "touch_raw": touch_chunk,
-            "note": np.asarray(_notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_raw)), dtype=np.float32)[offset:end_frame],
+            "note": np.asarray(_notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_time)), dtype=np.float32)[offset:end_frame],
                 "note": _notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_chunk))[offset:end_frame] if _notes() else np.zeros(len(touch_chunk), dtype=np.float32),
             "sound_id": file_data["sound_id"],
             "sound": file_data["sound"],
