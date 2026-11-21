@@ -88,7 +88,7 @@ var settings = (
 
 var sentire, server, originalSoundKey;
 var processing, ctl;
-var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeManifest, writeInfo;
+var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeNotes, writeManifest, writeInfo;
 var folder, eventRows = List[], noteRows = List[], manifestRows = List[], buffers = List[], recorder = nil, running = false;
 
 // Check if Sentire is booted
