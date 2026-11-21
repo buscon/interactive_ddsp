@@ -117,8 +117,11 @@ def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
             if touch.dim() == 2:
                 touch = touch.unsqueeze(-1)
             sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
-            
-            pred = model(sensor, touch, sound_id).squeeze(-1)
+            note = torch.from_numpy(np.asarray(val_item.get("note", np.zeros_like(val_item["sensor"])), dtype=np.float32)[:int(chunk_s * 100)]).unsqueeze(0).to(device)
+            if note.dim() == 2:
+                note = note.unsqueeze(-1)
+
+            pred = model(sensor, touch, sound_id, note=note).squeeze(-1)
             val_l = model.loss_fn(pred, audio, scales, overlap)
             val_losses.append(val_l.item())
             
@@ -150,10 +153,14 @@ def prepare_batch(item, device, chunk_s):
     if touch.dim() == 2:
         touch = touch.unsqueeze(-1)
     sound_id = torch.tensor([item["sound_id"]], dtype=torch.long, device=device)
+    note = torch.from_numpy(np.asarray(item.get("note", np.zeros_like(item["sensor"])), dtype=np.float32)[:int(chunk_s * 100)]).unsqueeze(0).to(device)
+    if note.dim() == 2:
+        note = note.unsqueeze(-1)
     return {
         "audio": audio,
         "sensor": sensor,
         "touch": touch,
+        "note": note,
         "sound_id": sound_id,
         "sound": item["sound"],
         "curve": item["curve"],
@@ -308,6 +315,7 @@ def main():
                 "audio": chunk_audio,
                 "sensor": chunk_sensor,
                 "touch": chunk_touch,
+                "note": test_item.get("note", np.zeros_like(chunk_touch[..., 0] if chunk_touch.ndim > 1 else chunk_touch)).reshape(chunk_sensor.shape),
                 "sound_id": test_item["sound_id"],
             }
         else:
@@ -403,9 +411,12 @@ def main():
                 if touch.dim() == 2:
                     touch = touch.unsqueeze(-1)  # (B,T,1); dataset may return (B,T,2)
                 sound_id = batch["sound_id"].to(device)
+                note = batch["note"].to(device)
+                if note.dim() == 2:
+                    note = note.unsqueeze(-1)
                 
                 # Forward
-                pred = model(sensor, touch, sound_id).squeeze(-1)  # (B, L)
+                pred = model(sensor, touch, sound_id, note=note).squeeze(-1)  # (B, L)
                 
                 # Compute curriculum loss
                 loss = model.loss_curriculum(pred, audio, scales, overlap, step, touch=touch, sound_id=sound_id)
@@ -579,9 +590,10 @@ def main():
             for val_item in val_items:
                 val_batch = prepare_batch(val_item, device, chunk_s)
                 val_pred = model(
-                    val_batch["sensor"], 
-                    val_batch["touch"], 
-                    val_batch["sound_id"]
+                    val_batch["sensor"],
+                    val_batch["touch"],
+                    val_batch["sound_id"],
+                    note=val_batch.get("note")
                 ).squeeze(-1)
                 val_l = model.loss_fn(val_pred, val_batch["audio"], scales, overlap)
                 sil_l = model.silence_loss(val_batch["audio"], scales, overlap)
@@ -639,8 +651,11 @@ def main():
                 if touch_t.dim() == 2:
                     touch_t = touch_t.unsqueeze(-1)
                 sound_id_t = torch.tensor([fixed_chunk["sound_id"]], dtype=torch.long, device=device)
+                note_t = torch.from_numpy(np.asarray(fixed_chunk["note"], dtype=np.float32)).unsqueeze(0).to(device)
+                if note_t.dim() == 2:
+                    note_t = note_t.unsqueeze(-1)
                 
-                pred = model(sensor_t, touch_t, sound_id_t).squeeze(0).squeeze(-1)
+                pred = model(sensor_t, touch_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1)
                 
                 # Loss
                 final_loss = model.loss_fn(pred, audio_t, scales, overlap).item()
@@ -657,9 +672,9 @@ def main():
                 # Sensor ablation: zeroed and shuffled (rolled) sensor must change output
                 from scipy.stats import pearsonr
                 sensor_zero = torch.zeros_like(sensor_t)
-                pred_zero = model(sensor_zero, touch_t, sound_id_t).squeeze(0).squeeze(-1)
+                pred_zero = model(sensor_zero, touch_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1)
                 sensor_shuf = torch.roll(sensor_t.clone(), shifts=sensor_t.shape[1] // 2, dims=1)
-                pred_shuf = model(sensor_shuf, touch_t, sound_id_t).squeeze(0).squeeze(-1)
+                pred_shuf = model(sensor_shuf, touch_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1)
 
                 def _rms_envelope(x, frame_size=480, hop=480):
                     x = x.detach().cpu().numpy().ravel()

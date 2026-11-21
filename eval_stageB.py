@@ -350,12 +350,16 @@ def main():
             touch_t = torch.from_numpy(touch).unsqueeze(0).to(device)
             if touch_t.dim() == 2:
                 touch_t = touch_t.unsqueeze(-1)
+            note_np = np.asarray(item.get("note", np.zeros_like(sensor)), dtype=np.float32)
+            note_t = torch.from_numpy(note_np).unsqueeze(0).to(device)
+            if note_t.dim() == 2:
+                note_t = note_t.unsqueeze(-1)
             sound_id_t = torch.tensor([sound_id], dtype=torch.long, device=device)
             
             # Run model in eval mode
             try:
                 with torch.no_grad():
-                    pred = model(sensor_t, touch_t, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                    pred = model(sensor_t, touch_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1).cpu().numpy()
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     print("    GPU OOM, falling back to chunked rendering...")
@@ -378,10 +382,13 @@ def main():
                         touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).to(device)
                         if touch_chunk.dim() == 2:
                             touch_chunk = touch_chunk.unsqueeze(-1)
+                        note_chunk = torch.from_numpy(note_np[start//480:end//480]).unsqueeze(0).to(device)
+                        if note_chunk.dim() == 2:
+                            note_chunk = note_chunk.unsqueeze(-1)
                         audio_target_chunk = audio[start:end]
                         
                         with torch.no_grad():
-                            pred_chunk = model(sensor_chunk, touch_chunk, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                            pred_chunk = model(sensor_chunk, touch_chunk, sound_id_t, note=note_chunk).squeeze(0).squeeze(-1).cpu().numpy()
                         
                         # Crossfade
                         fade_samples = overlap_size // 480
@@ -491,7 +498,7 @@ def main():
             sensor_zero = torch.zeros_like(sensor_t)
             touch_zero = torch.zeros_like(touch_t)
             with torch.no_grad():
-                pred_abl_zero = model(sensor_zero, touch_zero, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                pred_abl_zero = model(sensor_zero, touch_zero, sound_id_t, note=note_t).squeeze(0).squeeze(-1).cpu().numpy()
             
             multiscale_abl_zero = compute_multiscale_loss(pred_abl_zero, audio, scales, overlap, device)
             pred_rms_abl_zero = compute_rms_envelope(pred_abl_zero)
@@ -525,7 +532,7 @@ def main():
                 touch_rolled_t = touch_rolled_t.unsqueeze(-1)
             
             with torch.no_grad():
-                pred_abl_rolled = model(sensor_rolled_t, touch_rolled_t, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
+                pred_abl_rolled = model(sensor_rolled_t, touch_rolled_t, sound_id_t, note=note_t).squeeze(0).squeeze(-1).cpu().numpy()
             
             multiscale_abl_rolled = compute_multiscale_loss(pred_abl_rolled, audio, scales, overlap, device)
             pred_rms_abl_rolled = compute_rms_envelope(pred_abl_rolled)

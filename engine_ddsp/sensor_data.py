@@ -6,6 +6,15 @@ import json
 import os
 import random
 import numpy as np
+import json as _json
+_NOTES = None
+def _notes():
+    global _NOTES
+    if _NOTES is None:
+        import os
+        p = os.path.join(os.path.dirname(__file__), "..", "bakeoff_notes.json")
+        _NOTES = _json.load(open(p)) if os.path.exists(p) else {}
+    return _NOTES
 import librosa
 import torch
 from torch.utils.data import Dataset
@@ -210,6 +219,8 @@ class AlignedChunkDataset(Dataset):
             "sensor": sensor_chunk,
             "touch": touch,
             "touch_raw": touch_chunk,
+            "note": np.asarray(_notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_raw)), dtype=np.float32)[offset:end_frame],
+                "note": _notes().get(f"{file_data['sound']}_proximity_curve_{file_data['curve']}", [0.0]*len(touch_chunk))[offset:end_frame] if _notes() else np.zeros(len(touch_chunk), dtype=np.float32),
             "sound_id": file_data["sound_id"],
             "sound": file_data["sound"],
             "curve": file_data["curve"],
@@ -237,6 +248,7 @@ class AlignedChunkDataset(Dataset):
                     "sensor": sensor,
                     "touch": touch,
                     "touch_raw": touch_time,
+                    "note": np.asarray(_notes().get(f"{f['sound']}_proximity_curve_{f['curve']}", [0.0]*len(touch_time)), dtype=np.float32),
                     "sound_id": f["sound_id"],
                     "sound": f["sound"],
                     "curve": f["curve"],

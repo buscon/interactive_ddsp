@@ -3,6 +3,7 @@ SensorDDSP: DDSP model for proximity sensor conditioning.
 Conditions on sensor value, touch_time, and sound_id.
 """
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 from .synth import (
@@ -76,6 +77,11 @@ class SensorDDSP(nn.Module):
         
         # Sound embedding
         self.sound_emb = nn.Embedding(n_sounds, sound_emb_dim)
+        # per-sound LFO (vibrato/FM) gated by touch: rate Hz, depth (fraction of f0)
+        self.lfo_rate = nn.Embedding(n_sounds, 1)
+        self.lfo_depth = nn.Embedding(n_sounds, 1)
+        nn.init.uniform_(self.lfo_rate.weight, 0.5, 6.0)
+        nn.init.uniform_(self.lfo_depth.weight, 0.0, 0.02)
         
         # Input to GRU: sensor_mlp + touch_mlp + emb = hidden + hidden + sound_emb_dim
         gru_input_dim = hidden_size + hidden_size + sound_emb_dim
@@ -125,7 +131,7 @@ class SensorDDSP(nn.Module):
         nb = self.n_bands
         self.noise_head.bias.data.copy_(2.0 - 0.15 * torch.arange(nb).float())
     
-    def forward(self, sensor, touch, sound_id, touch_onset=None):
+    def forward(self, sensor, touch, sound_id, touch_onset=None, note=None):
         """
         Forward pass.
         
@@ -188,7 +194,19 @@ class SensorDDSP(nn.Module):
         # f0 = f0_base[sound_id] * 2^(max_f0_octaves * tanh(f0_deviation))
         f0_base_sound = self.f0_base[sound_id]  # (B,)
         f0_base = f0_base_sound.unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
-        f0 = f0_base * (2 ** (self.max_f0_octaves * torch.tanh(f0_deviation)))  # (B, T, 1)
+        # v4: absolute pitch from note input (0 = no touch -> base); residual deviation on top
+        if note is None:
+            note = torch.zeros_like(f0_base)
+        note_f0 = torch.where(note > 0, note, f0_base)  # (B, T, 1)
+        f0 = note_f0 * (2 ** (self.max_f0_octaves * torch.tanh(f0_deviation)))  # (B, T, 1)
+        # v4: per-sound LFO gated by touch (phase accumulated over blocks at control rate)
+        t_ch = touch[..., :1]
+        in_touch = (t_ch > 0).float()
+        rate = torch.sigmoid(self.lfo_rate(sound_id)) * 6.0  # (B,1) Hz
+        depth = torch.sigmoid(self.lfo_depth(sound_id)) * 0.05  # (B,1)
+        phase = torch.cumsum(rate.unsqueeze(1) / 100.0, dim=1)  # (B, T) cycles
+        lfo = 1.0 + in_touch * depth.unsqueeze(1) * torch.sin(2 * torch.pi * phase)
+        f0 = f0 * lfo
         self._last_f0 = f0.detach() if not torch.is_grad_enabled() else f0  # stash for f0 loss
         
         # Apply scale function to harmonic params
@@ -401,6 +419,19 @@ class SensorDDSP(nn.Module):
         rms_loss = (pred_log_rms - target_log_rms).abs().mean()
 
         total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
+
+        # v4: modulation-depth match on sustained-touch frames (touch_time > 2 s)
+        if touch is not None and touch.shape[-1] >= 1:
+            sustained = (touch[..., 0] > float(np.log1p(2.0))).float()  # (B, T)
+            if sustained.sum() > 10:
+                pe = self.frame_log_rms(pred).squeeze(-1)
+                te = self.frame_log_rms(target).squeeze(-1)
+                ws = sustained.sum(1) + 1e-8
+                pm = (pe * sustained).sum(1) / ws
+                tm = (te * sustained).sum(1) / ws
+                ps = (((pe - pm.unsqueeze(1)) ** 2) * sustained).sum(1) / ws
+                ts = (((te - tm.unsqueeze(1)) ** 2) * sustained).sum(1) / ws
+                total = total + 1.0 * w * (ps.sqrt() - ts.sqrt()).abs().mean()
 
         # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
         if sound_id is not None:
