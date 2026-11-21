@@ -105,7 +105,7 @@ Routine {
         waited = waited + 0.5;
     };
     
-    if (~recordingSeries.isNil.not) {
+    if (~recordingSeries.isNil) {
         "ERROR: Recording routine did not start within % seconds".format(startTimeout).error;
         "Check record_dataset_v5.scd for errors.".error;
         1.exit; 3600.wait;
