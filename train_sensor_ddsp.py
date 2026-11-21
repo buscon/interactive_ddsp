@@ -315,7 +315,7 @@ def main():
                 "audio": chunk_audio,
                 "sensor": chunk_sensor,
                 "touch": chunk_touch,
-                "note": test_item.get("note", np.zeros_like(chunk_touch[..., 0] if chunk_touch.ndim > 1 else chunk_touch)).reshape(chunk_sensor.shape),
+                "note": np.asarray(test_item.get("note", np.zeros(len(chunk_sensor))), dtype=np.float32)[offset:offset + len(chunk_sensor)],
                 "sound_id": test_item["sound_id"],
             }
         else:
