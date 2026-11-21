@@ -63,6 +63,8 @@ class SensorDDSP(nn.Module):
         self.block_size = block_size
         self.sound_emb_dim = sound_emb_dim
         self.max_f0_octaves = max_f0_octaves
+        self.w_mod_spec = 0.0   # v5 experimental losses default OFF (v5 run regressed: val 28.3 > silence 23.2)
+        self.w_attack = 0.0
         self.tilt_init = tilt_init
         
         # Register f0_base as buffer (per sound)
@@ -483,7 +485,7 @@ class SensorDDSP(nn.Module):
         # v5: modulation spectrum loss (match dominant modulation frequency in 0.1-10 Hz band)
         if touch is not None and touch.shape[-1] >= 3:
             mod_spec = self.mod_spec_loss(pred, target, touch)
-            total = total + 10.0 * w * mod_spec
+            total = total + getattr(self, 'w_mod_spec', 0.0) * w * mod_spec
 
         # v5: attack loss (short-window STFT weighted after touch_onset)
         # Derive touch_onset from touch (first channel is log1p(t) which > 0 iff t > 0)
@@ -493,7 +495,7 @@ class SensorDDSP(nn.Module):
             touch_onset_from_touch[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
             touch_onset_from_touch[..., 0, :] = (t_ch[..., 0, :] > 0).float()
             atk_loss = self.attack_loss(pred, target, touch_onset_from_touch, step)
-            total = total + 5.0 * w * atk_loss
+            total = total + getattr(self, 'w_attack', 0.0) * w * atk_loss
 
         # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
         if sound_id is not None:
