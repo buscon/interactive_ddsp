@@ -427,6 +427,12 @@ def main():
                 # Compute report loss (comparable loss_fn)
                 report_loss = model.loss_fn(pred, audio, scales, overlap)
                 
+                # Guard: skip batch if loss is not finite (belt-and-braces against NaN)
+                if not torch.isfinite(loss).item():
+                    print(f"  Skipping batch at step {step}: loss={loss.item():.6e}")
+                    opt.zero_grad()  # Clear gradients
+                    continue
+                
                 # Backward
                 opt.zero_grad()
                 loss.backward()
