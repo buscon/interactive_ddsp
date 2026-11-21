@@ -327,7 +327,6 @@ File.mkdir(folder +/+ "proximity_curves");
 					};
 				};
 			};
-		};
 		"Dataset: done, files are in %".format(folder).postln;
 	} { arg error;
 		error.reportError;
