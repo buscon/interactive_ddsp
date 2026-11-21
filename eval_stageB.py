@@ -286,7 +286,8 @@ def main():
     
     # Create model
     model_config = run_config["model"].copy()
-    model_config["f0_base_hz"] = f0_base
+    override = model_config.pop("f0_base_hz_override", None)
+    model_config["f0_base_hz"] = override if override else f0_base
     model = SensorDDSP(**model_config).to(device)
     model.eval()
     
@@ -346,7 +347,9 @@ def main():
             # Convert to tensor
             audio_t = torch.from_numpy(audio).unsqueeze(0).to(device)
             sensor_t = torch.from_numpy(sensor).unsqueeze(0).unsqueeze(-1).to(device)
-            touch_t = torch.from_numpy(touch).unsqueeze(0).unsqueeze(-1).to(device)
+            touch_t = torch.from_numpy(touch).unsqueeze(0).to(device)
+            if touch_t.dim() == 2:
+                touch_t = touch_t.unsqueeze(-1)
             sound_id_t = torch.tensor([sound_id], dtype=torch.long, device=device)
             
             # Run model in eval mode
@@ -372,7 +375,9 @@ def main():
                         
                         # Extract chunk
                         sensor_chunk = torch.from_numpy(sensor[start//480:end//480]).unsqueeze(0).unsqueeze(-1).to(device)
-                        touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).unsqueeze(-1).to(device)
+                        touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).to(device)
+                        if touch_chunk.dim() == 2:
+                            touch_chunk = touch_chunk.unsqueeze(-1)
                         audio_target_chunk = audio[start:end]
                         
                         with torch.no_grad():
@@ -452,7 +457,7 @@ def main():
             target_rms_val = np.sqrt(np.mean(audio**2))
             rms_ratio = pred_rms_val / (target_rms_val + 1e-8)
             
-            touch_time_raw = touch * 30.0  # denormalise (clip(t/30,0,2))
+            touch_time_raw = item["touch_raw"] if "touch_raw" in item else np.expm1(touch[..., 0])  # raw seconds
             onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch_time_raw)
             sustained_corr = compute_sustained_touch_corr(pred, audio, touch_time_raw)
             # New metrics: HF ratio (log-energy above 6kHz over total) and mod depth (std of log-RMS where touch>2s)
@@ -496,7 +501,7 @@ def main():
             # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
             sensor_rolled = np.roll(sensor, len(sensor) // 2)
             touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=0.98)
-            touch_rolled = np.clip(touch_time_rolled / 30.0, 0.0, 2.0)
+            touch_rolled = np.clip(np.stack([np.log1p(touch_time_rolled), np.exp(-touch_time_rolled / 0.5)], axis=-1), 0.0, 10.0)  # 2-feature touch, dataset rule
             
             # Verify against stored touch_time
             stored_touch_time = item["touch_raw"]  # This is touch_time
@@ -515,7 +520,9 @@ def main():
                 print(f"    Touch recomputation verified (max diff={touch_diff:.6f})")
             
             sensor_rolled_t = torch.from_numpy(sensor_rolled).unsqueeze(0).unsqueeze(-1).to(device)
-            touch_rolled_t = torch.from_numpy(touch_rolled).unsqueeze(0).unsqueeze(-1).to(device)
+            touch_rolled_t = torch.from_numpy(touch_rolled).unsqueeze(0).to(device)
+            if touch_rolled_t.dim() == 2:
+                touch_rolled_t = touch_rolled_t.unsqueeze(-1)
             
             with torch.no_grad():
                 pred_abl_rolled = model(sensor_rolled_t, touch_rolled_t, sound_id_t).squeeze(0).squeeze(-1).cpu().numpy()
