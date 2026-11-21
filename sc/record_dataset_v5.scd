@@ -238,6 +238,7 @@ File.mkdir(folder +/+ "proximity_curves");
 ~recordingSeries = fork {
 	try {
 		var nodes = (), trajectories = List[], silentBuf, rate = settings[\controlRate];
+		var soundEnv, freqBus, freqBusIndex, freqBusName;
 		var perFile = settings[\settle] + settings[\lead] + settings[\proximityCurveDur] + settings[\tail] + 1;
 
 		settings[\nodes].do { arg name;
@@ -285,10 +286,10 @@ File.mkdir(folder +/+ "proximity_curves");
 				// The freq mapping is in SentireSoundEnvironment.mappingNodes[\freq]
 				// It's a NodeProxy.audio(1) that outputs the frequency
 				// The bus is created when mappingNodes[\freq] is connected to continuousProxy[\freq]
-				var soundEnv = SentireSoundEnvironment.all[soundKey];
-				var freqBus = nil;
-				var freqBusIndex = nil;
-				var freqBusName = "freq";  // default name
+				soundEnv = SentireSoundEnvironment.all[soundKey];
+				freqBus = nil;
+				freqBusIndex = nil;
+				freqBusName = "freq";  // default name
 				
 				if (soundEnv.notNil and: { soundEnv.mappingNodes.notNil }) {
 					// mappingNodes[\freq] is a NodeProxy.audio(1)
