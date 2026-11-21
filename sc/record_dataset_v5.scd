@@ -3,8 +3,6 @@ Records the training dataset for interactive_ddsp: the SAME set of random proxim
 curves is replayed through several Sentire sound environments, and each
 replay is recorded.
 
-Version 5: logs \\freq per touch onset to notes.csv
-
 Why it is built this way (see SENSOR_SONIFICATION_PLAN.md, "Multi-Sound Replay"):
   - Every sound gets exactly the same proximity curves. The proximity curve file name is the
     key, so train/validation can be split by proximity curve (no gesture in train with one
@@ -38,7 +36,6 @@ Output, in <sentire folder>/Recordings/Dataset_<date>/ (or `folder`):
                   duration_s
   events.csv      recording_start / proximity_curve_start / proximity_curve_end / recording_end
                   times in seconds since the start of each file
-  notes.csv       touch onsets: sound,curve,onset_time_s,freq_hz
   dataset_info.txt  seed, rates, sounds, proximity_curve settings
 
 Limits:
@@ -91,7 +88,7 @@ var settings = (
 
 var sentire, server, originalSoundKey;
 var processing, ctl;
-var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeManifest, writeInfo, writeNotes, pollFreq;
+var controlFunction, makeProximityCurve, writeProximityCurve, cleanup, peakOf, writeEvents, writeManifest, writeInfo;
 var folder, eventRows = List[], noteRows = List[], manifestRows = List[], buffers = List[], recorder = nil, running = false;
 
 // Check if Sentire is booted
@@ -173,17 +170,17 @@ writeEvents = {
 	});
 };
 
+writeNotes = {
+	File.use((folder +/+ "notes.csv").standardizePath, "w", { arg file;
+		file.write("sound,curve,onset_time_s,freq_hz\n");
+		noteRows.do { arg r; file.write("%_%_%\n".format(r[0], r[1], r[2], r[3])) };
+	});
+};
+
 writeManifest = {
 	File.use((folder +/+ "manifest.csv").standardizePath, "w", { arg file;
 		file.write("sound,proximity_curve,file,proximity_curve_file,proximity_curve_start_s,duration_s\n");
 		manifestRows.do { arg row; file.write(row.join(",") ++ "\n") };
-	});
-};
-
-writeNotes = {
-	File.use((folder +/+ "notes.csv").standardizePath, "w", { arg file;
-		file.write("sound,curve,onset_time_s,freq_hz\n");
-		noteRows.do { arg row; file.write(row.join(",") ++ "\n") };
 	});
 };
 
@@ -235,103 +232,128 @@ folder = settings[\folder] ?? {
 File.mkdir(folder);
 File.mkdir(folder +/+ "proximity_curves");
 
-~recordingSeries = fork {
-	try {
-		var nodes = (), trajectories = List[], silentBuf, rate = settings[\controlRate];
-				var perFile = settings[\settle] + settings[\lead] + settings[\proximityCurveDur] + settings[\tail] + 1;
+	~recordingSeries = fork {
+		try {
+			var nodes = (), trajectories = List[], silentBuf, rate = settings[\controlRate];
+			var perFile = settings[\settle] + settings[\lead] + settings[\proximityCurveDur] + settings[\tail] + 1;
 
-		settings[\nodes].do { arg name;
-			nodes[name] = sentire.signalFlow.perform(name);
-		};
+			settings[\nodes].do { arg name;
+				nodes[name] = sentire.signalFlow.perform(name);
+			};
 
-		// generate all trajectories once; every sound replays the same ones
-		thisThread.randSeed = settings[\seed];
-		settings[\nProximityCurves].do { arg i;
-			var name = "proximity_curve_%".format((i + 1).asString.padLeft(3, "0"));
-			var values = makeProximityCurve.(settings[\proximityCurveDur], rate, settings[\touchRise],
-				settings[\touchHoldShort], settings[\touchHoldLong], settings[\pLongTouch]);
-			var buffer = Buffer.sendCollection(server, values, 1);
-			buffers.add(buffer);
-			writeProximityCurve.(folder +/+ "proximity_curves" +/+ (name ++ ".csv"), values, rate);
-			trajectories.add((name: name, buffer: buffer, dur: settings[\proximityCurveDur], sensorValues: values));
-		};
-		silentBuf = Buffer.sendCollection(server, FloatArray[0, 0], 1);
-		buffers.add(silentBuf);
-		server.sync;
-		writeInfo.value;
+			// generate all trajectories once; every sound replays the same ones
+			thisThread.randSeed = settings[\seed];
+			settings[\nProximityCurves].do { arg i;
+				var name = "proximity_curve_%".format((i + 1).asString.padLeft(3, "0"));
+				var values = makeProximityCurve.(settings[\proximityCurveDur], rate, settings[\touchRise],
+					settings[\touchHoldShort], settings[\touchHoldLong], settings[\pLongTouch]);
+				var buffer = Buffer.sendCollection(server, values, 1);
+				buffers.add(buffer);
+				writeProximityCurve.(folder +/+ "proximity_curves" +/+ (name ++ ".csv"), values, rate);
+			// V5: log touch onsets (sensor crossing thresholdTouch from below)
+			values.do { arg v, i;
+				if (i > 0 and: { v >= settings[\thresholdTouch] } and: { values[i-1] < settings[\thresholdTouch] }) {
+					noteRows.add(["PENDING_SOUND", name, (i / rate).round(0.001), 0.0]);
+				};
+			};
+				trajectories.add((name: name, buffer: buffer, dur: settings[\proximityCurveDur]));
+			};
+			silentBuf = Buffer.sendCollection(server, FloatArray[0, 0], 1);
+			buffers.add(silentBuf);
+			server.sync;
+			writeInfo.value;
 
-		sentire.simulateProximityCustomFunction(\soundSeries, controlFunction);
-		server.sync;
-		processing = sentire.signalFlow.proximityDetection.sensorProcessing;
-		ctl = processing.customSignal.proxy;
-		ctl.set(\buf, silentBuf.bufnum, \rate, rate, \t_go, 1);
+			sentire.simulateProximityCustomFunction(\soundSeries, controlFunction);
+			server.sync;
+			processing = sentire.signalFlow.proximityDetection.sensorProcessing;
+			ctl = processing.customSignal.proxy;
+			ctl.set(\buf, silentBuf.bufnum, \rate, rate, \t_go, 1);
 
-		"Dataset: % proximity curves x % sounds = % files, about % min".format(
-			settings[\nProximityCurves], settings[\sounds].size,
-			settings[\nProximityCurves] * settings[\sounds].size,
-			(settings[\nProximityCurves] * settings[\sounds].size * perFile / 60).round(1)).postln;
+			"Dataset: % proximity curves x % sounds = % files, about % min".format(
+				settings[\nProximityCurves], settings[\sounds].size,
+				settings[\nProximityCurves] * settings[\sounds].size,
+				(settings[\nProximityCurves] * settings[\sounds].size * perFile / 60).round(1)).postln;
 
-		settings[\sounds].do { arg sound;
-			var soundName = sound[0], soundKey = sound[1];
+			settings[\sounds].do { arg sound;
+				var soundName = sound[0], soundKey = sound[1];
 
-			if (SentireSoundEnvironment.all[soundKey].isNil) {
-				"Dataset: sound environment '%' not loaded, skipping %".format(soundKey, soundName).warn;
-			} {
-				sentire.soundEnvironmentSelector.selected = soundKey;
-				ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
-				settings[\settle].wait;
+				if (SentireSoundEnvironment.all[soundKey].isNil) {
+					"Dataset: sound environment '%' not loaded, skipping %".format(soundKey, soundName).warn;
+				} {
+					sentire.soundEnvironmentSelector.selected = soundKey;
+				noteRows = noteRows.collect { arg r; if (r[0] == "PENDING_SOUND") { [soundName] ++ r[1..] } { r } };
+					ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
+					settings[\settle].wait;
 
-				// V5: log touch onsets from the sensor trajectory (freq filled later by make_note_labels.py)
-				noteRows = noteRows ++ (traj[\sensorValues].collect { arg v, i;
-					var onset = (i > 0) and: { v >= settings[\thresholdTouch] } and: { traj[\sensorValues][i-1] < settings[\thresholdTouch] };
-					if (onset) { [soundName, traj[\name], (i / rate).round(0.001), 0.0] } { nil } });
-				noteRows = noteRows.select { arg r; r.notNil };
-
-				// replay the proximity curve
-						proximity_curveStart = (SystemClock.seconds - t0).round(0.001);
-						event.("proximity_curve_start");
-						ctl.set(\buf, traj[\buffer].bufnum, \rate, rate, \t_go, 1);
-						
-						
-						
-						traj[\dur].wait;
-						event.("proximity_curve_end");
-
-
-						settings[\tail].wait;
-						event.("recording_end");
-						recorder.stopRecording;
-						1.wait;
-						recorder.clear;
-						recorder = nil;
-						ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
-
-						manifestRows.add([soundName, traj[\name], base,
-							"proximity_curves/" ++ traj[\name] ++ ".csv", proximity_curveStart, traj[\dur]]);
-
-						// report what ended up on disk
-						nodes.keys.do { arg nodeName;
-							var file = folder +/+ "%_%.aiff".format(base, nodeName);
-							var info = peakOf.(file);
-							if (info.isNil) {
-								"Dataset: FILE MISSING %".format(file).warn;
-							} {
-								"  % s, peak % dBFS  (%)".format(
-									info[\duration].round(0.1), info[\peak].ampdb.round(0.1), PathName(file).fileName).postln;
-								if (info[\peak] < 0.0001) { "  -> this file is silent".warn };
-							};
+					trajectories.do { arg traj;
+						var base = "%_%".format(soundName, traj[\name]);
+						var path = folder +/+ base ++ ".aiff";
+						var firstFile = folder +/+ "%_%.aiff".format(base, nodes.keys.asArray.first);
+						var waited = 0, prepared = false, t0, proximity_curveStart;
+						var event = { arg label;
+							eventRows.add([soundName, traj[\name], base, label, (SystemClock.seconds - t0).round(0.001)]);
 						};
-						writeEvents.value;
-						writeNotes.value;
-						writeManifest.value;
+
+						if (settings[\skipExisting] and: { File.exists(firstFile) }) {
+							"Dataset: skipping %, already recorded".format(base).postln;
+						} {
+							"Dataset: recording %".format(base).postln;
+
+							// signal at 0, let the sound settle
+							ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
+							settings[\settle].wait;
+
+							recorder = NodeRecorder(path, nodes, true);
+							recorder.prepareRecording({ prepared = true });
+							while { prepared.not and: { waited < 10 } } { 0.1.wait; waited = waited + 0.1 };
+							if (prepared.not) { Error("Recorder was not prepared for %".format(base)).throw };
+
+							recorder.startRecording;
+							t0 = SystemClock.seconds;
+							event.("recording_start");
+							settings[\lead].wait;
+
+							// replay the proximity curve
+							proximity_curveStart = (SystemClock.seconds - t0).round(0.001);
+							event.("proximity_curve_start");
+							ctl.set(\buf, traj[\buffer].bufnum, \rate, rate, \t_go, 1);
+							traj[\dur].wait;
+							event.("proximity_curve_end");
+
+							settings[\tail].wait;
+							event.("recording_end");
+							recorder.stopRecording;
+							1.wait;
+							recorder.clear;
+							recorder = nil;
+							ctl.set(\buf, silentBuf.bufnum, \t_go, 1);
+
+							manifestRows.add([soundName, traj[\name], base,
+								"proximity_curves/" ++ traj[\name] ++ ".csv", proximity_curveStart, traj[\dur]]);
+
+							// report what ended up on disk
+							nodes.keys.do { arg nodeName;
+								var file = folder +/+ "%_%.aiff".format(base, nodeName);
+								var info = peakOf.(file);
+								if (info.isNil) {
+									"Dataset: FILE MISSING %".format(file).warn;
+								} {
+									"  % s, peak % dBFS  (%)".format(
+										info[\duration].round(0.1), info[\peak].ampdb.round(0.1), PathName(file).fileName).postln;
+									if (info[\peak] < 0.0001) { "  -> this file is silent".warn };
+								};
+							};
+							writeEvents.value;
+							writeManifest.value;
+						};
 					};
 				};
 			};
-		"Dataset: done, files are in %".format(folder).postln;
-	} { arg error;
-		error.reportError;
-		"Dataset: aborted because of the error above".error;
+			"Dataset: done, files are in %".format(folder).postln;
+		} { arg error;
+			error.reportError;
+			"Dataset: aborted because of the error above".error;
+		};
+		cleanup.value;
+		~recordingDone = true;  // lets run_both.scd know the series has ended (finished or aborted)
 	};
-	cleanup.value;
-	~recordingDone = true;  // lets run_both.scd know the series has ended (finished or aborted)
-};
