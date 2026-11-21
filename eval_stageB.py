@@ -499,7 +499,7 @@ def main():
             
             # (ii) sensor circularly rolled, touch recomputed with dataset rule
             # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
-            sensor_rolled = np.roll(sensor, len(sensor) // 2)
+            sensor_rolled = np.roll(sensor, 2000)  # shared protocol: roll 2000 frames (20 s), per curve-018 diagnostic
             touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=0.98)
             touch_rolled = np.clip(np.stack([np.log1p(touch_time_rolled), np.exp(-touch_time_rolled / 0.5)], axis=-1), 0.0, 10.0)  # 2-feature touch, dataset rule
             
