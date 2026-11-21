@@ -88,7 +88,8 @@ def find_good_chunk(audio, touch_raw, min_touch_seconds=2.0, chunk_s=10.0, sr=48
     chunk_audio = audio[480*offset : 480*end_frame]
     chunk_sensor = touch_raw[offset:end_frame]  # Use touch_raw as sensor
     _t = touch_raw[offset:end_frame]
-    chunk_touch = np.clip(np.stack([np.log1p(_t), np.exp(-_t / 0.5)], axis=-1), 0.0, 10.0)
+    # v5: 3 touch features - log1p(t), exp(-t/0.5), clip(t,0,40)
+    chunk_touch = np.stack([np.log1p(_t), np.exp(-_t / 0.5), np.clip(_t, 0.0, 40.0)], axis=-1)
     
     # Pad if needed
     if len(chunk_audio) < chunk_s * 100 * 480:
@@ -256,6 +257,10 @@ def main():
         # Create model
         model_config = config["model"].copy()
         model_config.pop("f0_base_hz_override", None)
+        # Remove LFO base parameters (they're registered as buffers in the model)
+        model_config.pop("lfo_rate_base", None)
+        model_config.pop("lfo_depth_mul_base", None)
+        model_config.pop("lfo_depth_add_base", None)
         model_config["f0_base_hz"] = f0_base
         model_config["tilt_init"] = True  # Always use tilted init
         model = SensorDDSP(**model_config).to(device)
