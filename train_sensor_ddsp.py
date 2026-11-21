@@ -27,7 +27,7 @@ from engine_ddsp.synth import multiscale_fft, safe_log
 class FixedChunkDataset(torch.utils.data.Dataset):
     """A dataset that always returns the same fixed chunk."""
     
-    def __init__(self, audio, sensor, touch, touch_raw, sound_id, sound, curve, offset):
+    def __init__(self, audio, sensor, touch, touch_raw, sound_id, sound, curve, offset, note):
         self.audio = audio
         self.sensor = sensor
         self.touch = touch
@@ -36,6 +36,7 @@ class FixedChunkDataset(torch.utils.data.Dataset):
         self.sound = sound
         self.curve = curve
         self.offset = offset
+        self.note = note
         self.chunk_samples = len(audio)
     
     def __len__(self):
@@ -52,6 +53,7 @@ class FixedChunkDataset(torch.utils.data.Dataset):
             "sound": self.sound,
             "curve": self.curve,
             "offset": self.offset,
+            "note": self.note.astype(np.float32),
         }
 
 
@@ -303,7 +305,8 @@ def main():
                 sound_id=test_item["sound_id"],
                 sound=test_item["sound"],
                 curve=test_item["curve"],
-                offset=offset
+                offset=offset,
+                note=np.asarray(test_item.get("note", np.zeros(len(chunk_sensor))), dtype=np.float32)[offset:offset + len(chunk_sensor)]
             )
             
             train_loader = torch.utils.data.DataLoader(
