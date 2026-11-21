@@ -397,7 +397,7 @@ def main():
                 pred = model(sensor, touch, sound_id).squeeze(-1)  # (B, L)
                 
                 # Compute curriculum loss
-                loss = model.loss_curriculum(pred, audio, scales, overlap, step)
+                loss = model.loss_curriculum(pred, audio, scales, overlap, step, touch=touch, sound_id=sound_id)
                 
                 # Compute report loss (comparable loss_fn)
                 report_loss = model.loss_fn(pred, audio, scales, overlap)
