@@ -165,7 +165,7 @@ def compute_touch_onset_f0_error(pred, target, touch_time, sr=48000, window_s=0.
     W = int(window_s * sr)
     errs = []
     for o in onsets:
-        a0 = o * 100 * 480  # frame(100Hz) -> samples (block 480)
+        a0 = o * 480  # touch frame at 100 Hz -> samples (block 480)
         a1 = min(a0 + W, min_len)
         if a1 - a0 < W // 2:
             continue
