@@ -1,0 +1,813 @@
+{
+  "summary": {
+    "total_onsets": 385,
+    "median_lag_ms": -50.67,
+    "jitter_iqr_ms": 213.33,
+    "jitter_std_ms": 114.56,
+    "within_47ms_pct": 21.0
+  },
+  "decision": "REBUILD",
+  "reason": "Jitter (213.3ms IQR) exceeds 15ms threshold \u2192 random error, rebuild from audio",
+  "per_sound_stats": [
+    {
+      "sound_id": "01_canopy_proximity_curve_001",
+      "median_lag_ms": -40.0,
+      "jitter_iqr_ms": 130.67,
+      "jitter_std_ms": 81.02,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_002",
+      "median_lag_ms": -93.33,
+      "jitter_iqr_ms": 69.33,
+      "jitter_std_ms": 59.28,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_003",
+      "median_lag_ms": -45.33,
+      "jitter_iqr_ms": 5.33,
+      "jitter_std_ms": 5.33,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_004",
+      "median_lag_ms": -114.68,
+      "jitter_iqr_ms": 117.32,
+      "jitter_std_ms": 104.1,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_005",
+      "median_lag_ms": -93.33,
+      "jitter_iqr_ms": 192.0,
+      "jitter_std_ms": 127.67,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_006",
+      "median_lag_ms": -82.67,
+      "jitter_iqr_ms": 96.0,
+      "jitter_std_ms": 46.93,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_007",
+      "median_lag_ms": -114.67,
+      "jitter_iqr_ms": 218.67,
+      "jitter_std_ms": 130.15,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 6
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_008",
+      "median_lag_ms": 98.67,
+      "jitter_iqr_ms": 77.33,
+      "jitter_std_ms": 130.94,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_009",
+      "median_lag_ms": -130.67,
+      "jitter_iqr_ms": 48.0,
+      "jitter_std_ms": 48.0,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_010",
+      "median_lag_ms": -98.67,
+      "jitter_iqr_ms": 80.0,
+      "jitter_std_ms": 104.1,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_011",
+      "median_lag_ms": -93.33,
+      "jitter_iqr_ms": 234.67,
+      "jitter_std_ms": 131.51,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_012",
+      "median_lag_ms": -136.0,
+      "jitter_iqr_ms": 21.33,
+      "jitter_std_ms": 28.3,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_013",
+      "median_lag_ms": 98.67,
+      "jitter_iqr_ms": 149.33,
+      "jitter_std_ms": 140.79,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_014",
+      "median_lag_ms": 2.67,
+      "jitter_iqr_ms": 149.33,
+      "jitter_std_ms": 109.74,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_015",
+      "median_lag_ms": -18.67,
+      "jitter_iqr_ms": 170.67,
+      "jitter_std_ms": 91.41,
+      "within_47ms_pct": 60.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_016",
+      "median_lag_ms": 13.33,
+      "jitter_iqr_ms": 48.0,
+      "jitter_std_ms": 83.14,
+      "within_47ms_pct": 75.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_017",
+      "median_lag_ms": -114.67,
+      "jitter_iqr_ms": 42.67,
+      "jitter_std_ms": 42.67,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_018",
+      "median_lag_ms": 45.33,
+      "jitter_iqr_ms": 106.67,
+      "jitter_std_ms": 69.65,
+      "within_47ms_pct": 40.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_019",
+      "median_lag_ms": -152.01,
+      "jitter_iqr_ms": 47.99,
+      "jitter_std_ms": 47.99,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "01_canopy_proximity_curve_020",
+      "median_lag_ms": -8.01,
+      "jitter_iqr_ms": 53.35,
+      "jitter_std_ms": 57.44,
+      "within_47ms_pct": 75.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_001",
+      "median_lag_ms": -72.0,
+      "jitter_iqr_ms": 48.0,
+      "jitter_std_ms": 45.88,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_002",
+      "median_lag_ms": -93.33,
+      "jitter_iqr_ms": 170.67,
+      "jitter_std_ms": 142.58,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_003",
+      "median_lag_ms": 2.67,
+      "jitter_iqr_ms": 21.33,
+      "jitter_std_ms": 21.33,
+      "within_47ms_pct": 100.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_004",
+      "median_lag_ms": 23.99,
+      "jitter_iqr_ms": 229.32,
+      "jitter_std_ms": 124.16,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_005",
+      "median_lag_ms": -8.0,
+      "jitter_iqr_ms": 277.33,
+      "jitter_std_ms": 151.23,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_006",
+      "median_lag_ms": -125.33,
+      "jitter_iqr_ms": 149.33,
+      "jitter_std_ms": 108.7,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_007",
+      "median_lag_ms": -18.67,
+      "jitter_iqr_ms": 210.67,
+      "jitter_std_ms": 123.28,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 6
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_008",
+      "median_lag_ms": -61.33,
+      "jitter_iqr_ms": 128.0,
+      "jitter_std_ms": 115.87,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_009",
+      "median_lag_ms": 13.33,
+      "jitter_iqr_ms": 74.67,
+      "jitter_std_ms": 74.67,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_010",
+      "median_lag_ms": -82.67,
+      "jitter_iqr_ms": 133.33,
+      "jitter_std_ms": 125.65,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_011",
+      "median_lag_ms": -88.0,
+      "jitter_iqr_ms": 90.67,
+      "jitter_std_ms": 95.55,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_012",
+      "median_lag_ms": -93.33,
+      "jitter_iqr_ms": 85.33,
+      "jitter_std_ms": 52.43,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_013",
+      "median_lag_ms": -8.0,
+      "jitter_iqr_ms": 96.0,
+      "jitter_std_ms": 90.51,
+      "within_47ms_pct": 66.7,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_014",
+      "median_lag_ms": -82.67,
+      "jitter_iqr_ms": 181.33,
+      "jitter_std_ms": 123.84,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_015",
+      "median_lag_ms": 2.67,
+      "jitter_iqr_ms": 149.33,
+      "jitter_std_ms": 119.43,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_016",
+      "median_lag_ms": -77.33,
+      "jitter_iqr_ms": 101.33,
+      "jitter_std_ms": 114.51,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_017",
+      "median_lag_ms": 130.67,
+      "jitter_iqr_ms": 0.0,
+      "jitter_std_ms": 0.0,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_018",
+      "median_lag_ms": 2.67,
+      "jitter_iqr_ms": 160.0,
+      "jitter_std_ms": 118.89,
+      "within_47ms_pct": 40.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_019",
+      "median_lag_ms": -173.34,
+      "jitter_iqr_ms": 26.66,
+      "jitter_std_ms": 26.66,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "02_forestPad_proximity_curve_020",
+      "median_lag_ms": 8.0,
+      "jitter_iqr_ms": 149.33,
+      "jitter_std_ms": 115.62,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_001",
+      "median_lag_ms": 40.0,
+      "jitter_iqr_ms": 168.0,
+      "jitter_std_ms": 125.39,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_002",
+      "median_lag_ms": -178.67,
+      "jitter_iqr_ms": 160.0,
+      "jitter_std_ms": 146.08,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_003",
+      "median_lag_ms": 2.67,
+      "jitter_iqr_ms": 32.0,
+      "jitter_std_ms": 32.0,
+      "within_47ms_pct": 100.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_004",
+      "median_lag_ms": 29.32,
+      "jitter_iqr_ms": 237.32,
+      "jitter_std_ms": 143.38,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_005",
+      "median_lag_ms": -18.67,
+      "jitter_iqr_ms": 181.33,
+      "jitter_std_ms": 129.0,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_006",
+      "median_lag_ms": 34.67,
+      "jitter_iqr_ms": 42.67,
+      "jitter_std_ms": 24.32,
+      "within_47ms_pct": 60.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_007",
+      "median_lag_ms": 98.67,
+      "jitter_iqr_ms": 61.33,
+      "jitter_std_ms": 84.14,
+      "within_47ms_pct": 16.7,
+      "n_onsets": 6
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_008",
+      "median_lag_ms": -34.67,
+      "jitter_iqr_ms": 176.0,
+      "jitter_std_ms": 113.51,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_009",
+      "median_lag_ms": -40.0,
+      "jitter_iqr_ms": 74.67,
+      "jitter_std_ms": 74.67,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_010",
+      "median_lag_ms": -136.0,
+      "jitter_iqr_ms": 109.33,
+      "jitter_std_ms": 119.35,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_011",
+      "median_lag_ms": -72.0,
+      "jitter_iqr_ms": 258.67,
+      "jitter_std_ms": 130.72,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_012",
+      "median_lag_ms": -146.67,
+      "jitter_iqr_ms": 245.33,
+      "jitter_std_ms": 132.03,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_013",
+      "median_lag_ms": 56.0,
+      "jitter_iqr_ms": 133.33,
+      "jitter_std_ms": 123.27,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_014",
+      "median_lag_ms": -61.33,
+      "jitter_iqr_ms": 138.67,
+      "jitter_std_ms": 118.28,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_015",
+      "median_lag_ms": -168.0,
+      "jitter_iqr_ms": 170.67,
+      "jitter_std_ms": 103.42,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_016",
+      "median_lag_ms": -88.0,
+      "jitter_iqr_ms": 120.0,
+      "jitter_std_ms": 119.82,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_017",
+      "median_lag_ms": 88.0,
+      "jitter_iqr_ms": 10.67,
+      "jitter_std_ms": 10.67,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_018",
+      "median_lag_ms": 130.67,
+      "jitter_iqr_ms": 128.0,
+      "jitter_std_ms": 106.15,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_019",
+      "median_lag_ms": -152.01,
+      "jitter_iqr_ms": 47.99,
+      "jitter_std_ms": 47.99,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "03_harmonicSwarm_proximity_curve_020",
+      "median_lag_ms": 77.33,
+      "jitter_iqr_ms": 53.33,
+      "jitter_std_ms": 34.14,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_001",
+      "median_lag_ms": -152.0,
+      "jitter_iqr_ms": 29.33,
+      "jitter_std_ms": 31.44,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_002",
+      "median_lag_ms": -72.0,
+      "jitter_iqr_ms": 53.33,
+      "jitter_std_ms": 46.09,
+      "within_47ms_pct": 33.3,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_003",
+      "median_lag_ms": 88.0,
+      "jitter_iqr_ms": 10.67,
+      "jitter_std_ms": 10.67,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_004",
+      "median_lag_ms": 18.67,
+      "jitter_iqr_ms": 109.34,
+      "jitter_std_ms": 62.83,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_005",
+      "median_lag_ms": -61.33,
+      "jitter_iqr_ms": 154.67,
+      "jitter_std_ms": 80.18,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_006",
+      "median_lag_ms": -136.0,
+      "jitter_iqr_ms": 21.33,
+      "jitter_std_ms": 100.83,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_007",
+      "median_lag_ms": -125.33,
+      "jitter_iqr_ms": 114.67,
+      "jitter_std_ms": 108.85,
+      "within_47ms_pct": 16.7,
+      "n_onsets": 6
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_008",
+      "median_lag_ms": -13.33,
+      "jitter_iqr_ms": 122.67,
+      "jitter_std_ms": 79.46,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_009",
+      "median_lag_ms": -18.67,
+      "jitter_iqr_ms": 32.0,
+      "jitter_std_ms": 32.0,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_010",
+      "median_lag_ms": -34.67,
+      "jitter_iqr_ms": 114.67,
+      "jitter_std_ms": 88.08,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_011",
+      "median_lag_ms": 29.33,
+      "jitter_iqr_ms": 82.67,
+      "jitter_std_ms": 63.27,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_012",
+      "median_lag_ms": -136.0,
+      "jitter_iqr_ms": 128.0,
+      "jitter_std_ms": 93.62,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_013",
+      "median_lag_ms": -82.67,
+      "jitter_iqr_ms": 85.33,
+      "jitter_std_ms": 72.52,
+      "within_47ms_pct": 33.3,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_014",
+      "median_lag_ms": 24.0,
+      "jitter_iqr_ms": 53.33,
+      "jitter_std_ms": 76.5,
+      "within_47ms_pct": 60.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_015",
+      "median_lag_ms": -72.0,
+      "jitter_iqr_ms": 117.33,
+      "jitter_std_ms": 69.0,
+      "within_47ms_pct": 40.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_016",
+      "median_lag_ms": -13.33,
+      "jitter_iqr_ms": 117.33,
+      "jitter_std_ms": 90.82,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_017",
+      "median_lag_ms": -24.0,
+      "jitter_iqr_ms": 37.33,
+      "jitter_std_ms": 37.33,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_018",
+      "median_lag_ms": 34.67,
+      "jitter_iqr_ms": 32.0,
+      "jitter_std_ms": 38.99,
+      "within_47ms_pct": 80.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_019",
+      "median_lag_ms": -50.68,
+      "jitter_iqr_ms": 74.68,
+      "jitter_std_ms": 74.68,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "04_modularPercussions_proximity_curve_020",
+      "median_lag_ms": -40.0,
+      "jitter_iqr_ms": 82.66,
+      "jitter_std_ms": 75.56,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_001",
+      "median_lag_ms": 98.67,
+      "jitter_iqr_ms": 72.0,
+      "jitter_std_ms": 118.87,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_002",
+      "median_lag_ms": -146.67,
+      "jitter_iqr_ms": 80.0,
+      "jitter_std_ms": 66.52,
+      "within_47ms_pct": 33.3,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_003",
+      "median_lag_ms": -29.33,
+      "jitter_iqr_ms": 160.0,
+      "jitter_std_ms": 160.0,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_004",
+      "median_lag_ms": -77.34,
+      "jitter_iqr_ms": 189.32,
+      "jitter_std_ms": 132.45,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_005",
+      "median_lag_ms": -13.33,
+      "jitter_iqr_ms": 269.33,
+      "jitter_std_ms": 148.83,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_006",
+      "median_lag_ms": -157.33,
+      "jitter_iqr_ms": 224.0,
+      "jitter_std_ms": 128.89,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_007",
+      "median_lag_ms": 61.33,
+      "jitter_iqr_ms": 186.67,
+      "jitter_std_ms": 111.66,
+      "within_47ms_pct": 16.7,
+      "n_onsets": 6
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_008",
+      "median_lag_ms": -130.67,
+      "jitter_iqr_ms": 122.67,
+      "jitter_std_ms": 64.22,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_009",
+      "median_lag_ms": 45.33,
+      "jitter_iqr_ms": 64.0,
+      "jitter_std_ms": 64.0,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_010",
+      "median_lag_ms": -109.33,
+      "jitter_iqr_ms": 138.67,
+      "jitter_std_ms": 125.53,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_011",
+      "median_lag_ms": 8.0,
+      "jitter_iqr_ms": 144.0,
+      "jitter_std_ms": 112.0,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_012",
+      "median_lag_ms": -125.33,
+      "jitter_iqr_ms": 106.67,
+      "jitter_std_ms": 107.39,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_013",
+      "median_lag_ms": -72.0,
+      "jitter_iqr_ms": 80.0,
+      "jitter_std_ms": 69.13,
+      "within_47ms_pct": 33.3,
+      "n_onsets": 3
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_014",
+      "median_lag_ms": 13.33,
+      "jitter_iqr_ms": 298.67,
+      "jitter_std_ms": 142.38,
+      "within_47ms_pct": 20.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_015",
+      "median_lag_ms": -61.33,
+      "jitter_iqr_ms": 181.33,
+      "jitter_std_ms": 88.83,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_016",
+      "median_lag_ms": -66.67,
+      "jitter_iqr_ms": 237.33,
+      "jitter_std_ms": 126.29,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_017",
+      "median_lag_ms": -77.33,
+      "jitter_iqr_ms": 101.33,
+      "jitter_std_ms": 101.33,
+      "within_47ms_pct": 50.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_018",
+      "median_lag_ms": 34.67,
+      "jitter_iqr_ms": 96.0,
+      "jitter_std_ms": 97.06,
+      "within_47ms_pct": 40.0,
+      "n_onsets": 5
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_019",
+      "median_lag_ms": -168.01,
+      "jitter_iqr_ms": 31.99,
+      "jitter_std_ms": 31.99,
+      "within_47ms_pct": 0.0,
+      "n_onsets": 2
+    },
+    {
+      "sound_id": "05_moss_and_mist_proximity_curve_020",
+      "median_lag_ms": 55.99,
+      "jitter_iqr_ms": 157.32,
+      "jitter_std_ms": 122.4,
+      "within_47ms_pct": 25.0,
+      "n_onsets": 4
+    }
+  ]
+}
