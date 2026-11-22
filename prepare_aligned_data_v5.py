@@ -14,6 +14,7 @@ This script:
 import os
 import sys
 import csv
+import os
 import numpy as np
 import soundfile as sf
 import json
@@ -22,7 +23,7 @@ from pathlib import Path
 
 # Constants
 SOURCE_DIR = Path("/home/marcello/sentire/Recordings/Dataset_20261121_134808/")
-OUTPUT_DIR = Path("/home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned_v5/")
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned_v5"))
 MANIFEST_PATH = SOURCE_DIR / "manifest.csv"
 NOTES_CSV_PATH = SOURCE_DIR / "notes.csv"
 
@@ -30,7 +31,7 @@ SAMPLE_RATE = 48000
 BLOCK_SIZE = 480  # samples per control frame (100 Hz)
 CONTROL_RATE = 100.0  # Hz
 DURATION_S = 60.0  # seconds
-THRESHOLD_TOUCH = 0.3  # Lower threshold for v5 (was 0.98 in v4)
+THRESHOLD_TOUCH = float(os.environ.get("TOUCH_THRESHOLD", "0.3"))  # v4 used 0.98 (= SC thresholdTouch); v5 lowered to 0.3
 
 
 def read_proximity_curve(curve_id: str) -> np.ndarray:
