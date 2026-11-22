@@ -1,0 +1,54 @@
+# SensorDDSP v6 configuration
+# Proximity sensor + touch_time + sound_id -> audio
+# v6: bakeoff_data_aligned_v5 dataset, losses OFF (ablation later)
+
+data:
+  root: /home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned_v5
+  chunk_s: 10.0
+  train_sounds: null  # null = all
+  val_sounds: null
+  train_curves: null  # null = all in train split
+  val_curves: null
+
+model:
+  n_sounds: 5
+  hidden_size: 512
+  n_harmonic: 100
+  n_bands: 65
+  sampling_rate: 48000
+  block_size: 480
+  sound_emb_dim: 16
+  max_f0_octaves: 2.0
+  # f0 roots from Sentire SC sources (sound_id order: canopy, forestPad, swarm, percussion, moss)
+  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+  
+  # v5/v6: LFO base tables (per sound) - from SC sources
+  # canopy: rate=1+clip(0.3t,1,30), depth_add=0.5t clip 0..20 (additive FM)
+  # swarm: rate=0.1+0.03t, depth_mul=(0.3+0.8t)% multiplicative
+  # forestPad/moss/percussion: no LFO
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
+  
+# v6: Loss weights - set in training script
+# w_mod_spec: 0.0  # modulation spectral loss (ablation: try 1.0)
+# w_attack: 0.0    # attack transient loss (ablation: try 1.0)
+
+train:
+  batch: 8
+  lr_start: 1.0e-3
+  lr_stop: 1.0e-4
+  decay_over: 1000  # steps
+  scales: [4096, 2048, 1024, 512, 256, 128]
+  overlap: 0.75
+  steps: 2000
+  seed: 0
+  eval_every: 250
+  eval_curves: [017, 018, 019, 020]  # held-out curves for evaluation
+  save_every: 250
+  
+# v6 ablation protocol (roll-2000):
+# - stageB_v6_base: losses OFF (this config)
+# - stageB_v6_attack: w_attack=1.0, w_mod_spec=0.0
+# - stageB_v6_modspec: w_attack=0.0, w_mod_spec=1.0
+# - stageB_v6_both: w_attack=1.0, w_mod_spec=1.0
