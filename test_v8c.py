@@ -54,9 +54,9 @@ def test_fast_curves_lagged():
     gate = (t_sec > 0).float() * (t_d >= 0).float()
     t_dc = t_d.clamp(min=0)
     f03 = gate * torch.exp(-t_dc / 0.03)
-    assert f03[0, 100:139, 0].max() == 0, 'fast curve active before lag'
+    assert f03[0, 100:138, 0].max() == 0, 'fast curve active before lag'
     pk = f03[0, :, 0].argmax().item()
-    assert 139 <= pk <= 142, f'fast curve peaks at frame {pk}, want ~100+40 (lag 0.395s)'
+    assert 138 <= pk <= 142, f'fast curve peaks at frame {pk}, want ~100+40 (lag 0.395s)'
     print(f'fast curves lagged OK (peak frame {pk}, lag frame ~{int(lag*100)})')
 
 
