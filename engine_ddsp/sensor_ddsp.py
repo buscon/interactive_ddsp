@@ -25,6 +25,15 @@ def _mlp(in_dim, hidden, out_dim, n_layers=2):
     return nn.Sequential(*layers)
 
 
+
+def _onset_from_touch(touch):
+    """touch: (B,T,>=1) with ch0 = log1p(t_sec). onset[t]=1 iff in-touch and within one frame of touch start.
+    Fixes spurious onsets at chunk frame 0 (mid-touch chunk starts)."""
+    t_ch = touch[..., :1]
+    t_sec = torch.expm1(t_ch.clamp(min=0))  # raw seconds
+    in_t = (t_sec > 0).float()
+    return in_t * (t_sec <= 0.015).float()
+
 class SensorDDSP(nn.Module):
     """
     DDSP model conditioned on proximity sensor, touch_time, and sound_id.
@@ -135,6 +144,12 @@ class SensorDDSP(nn.Module):
         self.harmonic_head = nn.Linear(hidden_size, n_harmonic + 1)
         self.noise_head = nn.Linear(hidden_size, n_bands)
         self.f0_head = nn.Linear(hidden_size + 1 + 3, 1)  # +1 touch_onset, +3 touch features
+        # V8b: fast-decay touch features -> direct additive contribution to amp heads.
+        # Zero-init so a V6 checkpoint (without fast_head keys) behaves identically at start.
+        self.fast_head = nn.Linear(3, (n_harmonic + 1) + n_bands)
+        with torch.no_grad():
+            self.fast_head.weight.zero_()
+            self.fast_head.bias.zero_()
         
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
@@ -170,6 +185,16 @@ class SensorDDSP(nn.Module):
         nb = self.n_bands
         self.noise_head.bias.data.copy_(2.0 - 0.15 * torch.arange(nb).float())
     
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        # V8b: allow checkpoints that predate fast_head (e.g. V6 state_final.pth)
+        for name, p in self.named_parameters():
+            if name.startswith('fast_head.') and (prefix + name) not in state_dict:
+                state_dict[prefix + name] = p.detach().clone()
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+                                      missing_keys, unexpected_keys, error_msgs)
+
     def forward(self, sensor, touch, sound_id, touch_onset=None, note=None):
         """
         Forward pass.
@@ -187,16 +212,13 @@ class SensorDDSP(nn.Module):
         # Derive binary touch_onset from touch_time if not provided:
         # onset[t] = 1 iff touch[t] > 0 and touch[t-1] == 0 (first frame: onset if touch[0] > 0)
         if touch_onset is None:
-            # onset from the touch-seconds feature (first channel; log1p(t)>0 iff t>0)
-            t_ch = touch[..., :1]
-            touch_onset = torch.zeros_like(t_ch)
-            touch_onset[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
-            touch_onset[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+            # onset from the touch-seconds feature via shared helper (no false onsets at frame 0)
+            touch_onset = _onset_from_touch(touch)
 
         # touch may arrive as (B,T,1) legacy normalised seconds/30 — expand to 3 features
         if touch.shape[-1] == 1:
             t_sec = touch * 30.0
-            touch = torch.cat([torch.log1p(t_sec), torch.exp(-t_sec / 0.5), torch.clamp(t_sec, 0, 40)], dim=-1)
+            touch = torch.cat([torch.log1p(t_sec), (t_sec > 0) * torch.exp(-t_sec / 0.5), torch.clamp(t_sec, 0, 40)], dim=-1)
 
         # Process sensor and touch through MLPs
         sensor_mlp = self.mlp_sensor(sensor)  # (B, T, hidden)
@@ -224,6 +246,15 @@ class SensorDDSP(nn.Module):
         # Heads
         harmonic_param = self.harmonic_head(mlp_out)  # (B, T, n_harmonic+1)
         noise_param = self.noise_head(mlp_out)        # (B, T, n_bands)
+        # V8b: fast-decay touch envelope -> direct additive amp contribution (locked to touch)
+        t_sec_raw = torch.expm1(touch[..., :1].clamp(min=0))
+        in_t = (t_sec_raw > 0).float()
+        fast = torch.cat([in_t * torch.exp(-t_sec_raw / 0.03),
+                          in_t * torch.exp(-t_sec_raw / 0.1),
+                          in_t * torch.exp(-t_sec_raw / 0.3)], dim=-1)  # (B,T,3)
+        fh = self.fast_head(fast)
+        harmonic_param = harmonic_param + fh[..., :self.harmonic_head.out_features]
+        noise_param = noise_param + fh[..., self.harmonic_head.out_features:]
         f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch], dim=-1))  # (B, T, 1)
         f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)  # keep tanh out of saturation
         # Clamp pre-activation to [-3, 3] for un-saturated tanh
@@ -501,41 +532,35 @@ class SensorDDSP(nn.Module):
             per_frame_loss = (p_s - t_s).abs() + (safe_log(p_s + 1e-5) - safe_log(t_s + 1e-5)).abs()
             multiscale_losses.append(per_frame_loss)
         
-        # Apply onset weighting if enabled
+        # Apply onset weighting if enabled (V8b: one 100 Hz profile, shared by spectral + RMS terms)
         if self.onset_weighting['enabled'] and touch is not None:
-            # Extract touch time feature (first channel: log1p(t))
-            # touch is (B, T, 3) at 100 Hz, extract first dim as (B, T, 1)
-            touch_time = touch[..., :1]  # (B, T, 1)
-            
-            # Compute onset weights per scale - weights are (B, frames, 1) matching each STFT
-            onset_weights = self._compute_onset_weights_per_stft(touch_time, pred_stft)
-            
-            # Apply weights to each scale's loss with normalization
+            w100 = self._onset_weight_profile_100hz(touch[..., :1])  # (B, T_touch, 1)
+
+            # Spectral terms: max-pool profile to each STFT scale's frame grid
             weighted_multiscale_losses = []
-            for scale_idx, loss_L in enumerate(multiscale_losses):
-                # loss_L shape: (B, freqs, frames)
-                # weight shape: (B, frames, 1)
-                weight = onset_weights[scale_idx]  # (B, frames, 1)
-                
-                # Expand weight to match freqs dimension: (B, 1, frames, 1)
-                weight_expanded = weight.unsqueeze(1)  # (B, 1, frames, 1)
-                loss_expanded = loss_L.unsqueeze(-1)  # (B, freqs, frames, 1)
-                
-                # Apply weights and normalize: sum(w * L) / sum(w)
-                loss_weighted = (loss_expanded * weight_expanded).sum()
-                weight_sum = weight_expanded.sum()
-                loss_normalized = loss_weighted / weight_sum.clamp(min=1e-6)
-                
-                weighted_multiscale_losses.append(loss_normalized)
-            
-            # Average across scales
+            for scale_idx, (loss_L, p_s) in enumerate(zip(multiscale_losses, pred_stft)):
+                scale = [4096, 2048, 1024, 512, 256, 128][scale_idx]
+                hop = int(scale * (1 - overlap))
+                w_s = self._profile_to_stft(w100, p_s.shape[2], hop)  # (B, frames, 1)
+                w_e = w_s.unsqueeze(1)  # (B, 1, frames, 1)
+                loss_weighted = (loss_L.unsqueeze(-1) * w_e).sum()
+                weight_sum = w_e.sum().clamp(min=1e-6)
+                weighted_multiscale_losses.append(loss_weighted / weight_sum)
             multiscale_loss_weighted = sum(weighted_multiscale_losses) / len(weighted_multiscale_losses)
-            
-            # Combine with curriculum: use weighted multiscale for lin_loss, weighted for lg_loss
-            # We combine all spectral terms with onset weighting
             lin_loss_weighted = multiscale_loss_weighted
             lg_loss_weighted = multiscale_loss_weighted
-            
+
+            # RMS envelope term: same profile aligned to block grid (fixes V8 crash)
+            T_rms = pred_log_rms.shape[1]
+            if w100.shape[1] >= T_rms:
+                w_r = w100[:, :T_rms, :]
+            else:
+                pad = torch.ones_like(w100[:, :1, :]).expand(-1, T_rms - w100.shape[1], -1)
+                w_r = torch.cat([w100, pad], dim=1)
+            d_rms = (pred_log_rms - target_log_rms).abs()
+            w_rms = w_r.reshape(d_rms.shape)  # match (B,T) or (B,T,1)
+            rms_loss = (d_rms * w_rms).sum() / w_rms.sum().clamp(min=1e-6)
+
             total = 100.0 * lin_loss_weighted + w * lg_loss_weighted + 1.0 * rms_loss
         else:
             # Original unweighted computation - keep existing behavior for backward compatibility
@@ -566,10 +591,7 @@ class SensorDDSP(nn.Module):
         # v5: attack loss (short-window STFT weighted after touch_onset)
         # Derive touch_onset from touch (first channel is log1p(t) which > 0 iff t > 0)
         if touch is not None and touch.shape[-1] >= 3:
-            t_ch = touch[..., :1]
-            touch_onset_from_touch = torch.zeros_like(t_ch)
-            touch_onset_from_touch[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
-            touch_onset_from_touch[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+            touch_onset_from_touch = _onset_from_touch(touch)
             atk_loss = self.attack_loss(pred, target, touch_onset_from_touch, step)
             total = total + getattr(self, 'w_attack', 0.0) * w * atk_loss
 
@@ -821,102 +843,43 @@ class SensorDDSP(nn.Module):
         
         return weights_per_scale
 
-    def _compute_onset_weights_per_stft(self, touch, pred_stft):
+    def _onset_weight_profile_100hz(self, touch):
+        """One onset weight profile at the touch rate (100 Hz), causal decaying.
+
+        w(t) = 1 + (k-1) * [ exp(-t/tau) response to onset for t in [0, window_ms]
+                             + 0.5 * onset shifted back by pre_ms (flat pre-roll) ]
+        Built with conv1d so the window points FORWARD in time (fixes backwards-shift bug).
+        Returns (B, T, 1).
         """
-        Compute per-frame onset weights for multiscale loss, matching STFT frame counts.
-        
-        Args:
-            touch: (B, T_touch, 1) float32, touch_time at 100 Hz
-            pred_stft: list of STFT tensors from multiscale_fft, each (B, freqs, frames)
-        
-        Returns:
-            List of weight tensors, one per STFT scale
-            Each: (B, frames, 1) float32, normalized weights matching STFT frame count
-        """
-        if not self.onset_weighting['enabled']:
-            return [None] * len(pred_stft)
-        
-        if touch is None or touch.shape[-1] < 1:
-            return [None] * len(pred_stft)
-        
-        # Derive binary touch_onset from touch_time
-        # Touch onset = touch going from 0 to >0
-        touch_onset = torch.zeros_like(touch)
-        touch_onset[:, 1:, :] = ((touch[:, 1:, :] > 0) & (touch[:, :-1, :] == 0)).float()
-        touch_onset[:, 0:1, :] = (touch[:, 0:1, :] > 0).float()
-        
-        weights_per_scale = []
-        
-        # Pre-compute window and dilate sizes (these depend on frame rate)
-        # We'll use the largest scale (4096, ~47 Hz) to compute max values
-        largest_hop = int(4096 * (1 - 0.75))  # 1024
-        smallest_frame_rate = self.sampling_rate / largest_hop  # ~47 Hz
-        
-        # Window: 150ms after onset + 20ms pre-onset margin = 170ms total
-        window_ms = 150
-        pre_onset_ms = 20
-        dilate_ms = 10
-        
-        window_frames_max = int((window_ms + pre_onset_ms) * smallest_frame_rate / 1000)
-        dilate_frames_max = int(dilate_ms * smallest_frame_rate / 1000)
-        
-        for scale_idx, stft_out in enumerate(pred_stft):
-            # Get the target number of frames from STFT output
-            # stft_out shape: (B, freqs, frames)
-            B, freqs, T_frames = stft_out.shape
-            
-            # Compute frame rate for this scale
-            scale = [4096, 2048, 1024, 512, 256, 128][scale_idx]  # Order matters
-            overlap = 0.75
-            hop = int(scale * (1 - overlap))
-            stft_frame_rate = self.sampling_rate / hop
-            
-            # Downsample touch to STFT frame rate
-            # Use stride to effectively average touch frames per STFT frame
-            T_touch = touch_onset.shape[1]
-            
-            # Convert touch frame to STFT frame mapping
-            # touch frame i maps to STFT frame i * stft_frame_rate / 100
-            touch_indices = torch.arange(T_frames, device=touch.device)
-            touch_frame_indices = (touch_indices * 100 / stft_frame_rate).long()
-            touch_frame_indices = torch.clamp(touch_frame_indices, 0, T_touch - 1)
-            
-            # Extract touch_onset at these indices
-            # touch_onset: (B, T_touch, 1) -> (B, T_frames, 1)
-            touch_onset_at_stft = touch_onset[:, touch_frame_indices, :]  # (B, T_frames, 1)
-            
-            # Dilate by ±dilate_frames_max (safe upper bound)
-            # Then trim to window_frames_max after onset
-            dilate_frames = int(dilate_ms * stft_frame_rate / 1000)
-            window_frames = int((window_ms + pre_onset_ms) * stft_frame_rate / 1000)
-            
-            # Build weight mask by summing shifted versions
-            weight = torch.zeros_like(touch_onset_at_stft)
-            
-            for offset in range(-dilate_frames, window_frames + dilate_frames + 1):
-                shifted = torch.zeros_like(touch_onset_at_stft)
-                if offset == 0:
-                    shifted = touch_onset_at_stft
-                elif offset < 0:
-                    # Shift left (earlier in time)
-                    shift_amount = -offset
-                    if shift_amount < T_frames:
-                        shifted[:, shift_amount:, :] = touch_onset_at_stft[:, :T_frames - shift_amount, :]
-                else:
-                    # Shift right (later in time)
-                    shift_amount = offset
-                    if shift_amount < T_frames:
-                        shifted[:, :T_frames - shift_amount, :] = touch_onset_at_stft[:, shift_amount:, :]
-                
-                weight += shifted
-            
-            # Apply boost factor (k=5.0)
-            k = self.onset_weighting['factor']  # From config, default 5.0
-            frame_weights = 1.0 + (k - 1.0) * weight  # 1.0 baseline + boost at onsets
-            
-            weights_per_scale.append(frame_weights)
-        
-        return weights_per_scale
+        ow = self.onset_weighting
+        k = ow.get('factor', 5.0)
+        window_ms = ow.get('window_ms', 600)
+        tau_ms = ow.get('decay_tau_ms', 200)
+        pre_ms = ow.get('pre_ms', 100)
+        rate = ow.get('touch_rate_hz', 100)
+        onset = _onset_from_touch(touch)  # (B,T,1)
+        T = onset.shape[1]
+        klen = int(window_ms * rate / 1000) + 1
+        kern = torch.exp(-torch.arange(klen, device=onset.device).float() / (tau_ms * rate / 1000))
+        kern = kern / kern.sum()
+        kern = kern.flip(0)  # conv1d is cross-correlation: flip so the peak lands AT the onset, decaying forward
+        prof = F.conv1d(onset.transpose(1, 2), kern.view(1, 1, -1), padding=klen - 1)[..., :T].transpose(1, 2)
+        pre_frames = int(pre_ms * rate / 1000)
+        pre = torch.zeros_like(onset)
+        if pre_frames > 0 and pre_frames < T:
+            pre[:, :-pre_frames, :] = onset[:, pre_frames:, :] * 0.5  # boost appears pre_frames BEFORE onset
+        w = 1.0 + (k - 1.0) * (prof + pre)
+        return w.clamp(max=k)
+
+    def _profile_to_stft(self, w100, stft_frames, hop_samples):
+        """Max-pool the 100 Hz profile onto the STFT frame grid (fixes dropped onsets at coarse scales)."""
+        block = self.block_size
+        device = w100.device
+        starts = (torch.arange(stft_frames, device=device) * hop_samples) // block
+        span = max(1, (hop_samples + block - 1) // block + 1)
+        idx = starts.unsqueeze(1) + torch.arange(span, device=device).unsqueeze(0)  # (F, span)
+        idx = idx.clamp(max=w100.shape[1] - 1)
+        return w100[:, idx, :].amax(dim=2)  # (B, F, 1)
 
     def loss(self, batch, return_losses=False):
         """

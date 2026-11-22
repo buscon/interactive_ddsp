@@ -392,7 +392,12 @@ def main():
             # (ii) sensor circularly rolled, touch recomputed with dataset rule
             # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
             sensor_rolled = np.roll(sensor, len(sensor) // 2)
-            touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=0.98)
+                # V8b: read touch threshold from dataset metadata (train/eval consistency)
+    thr = 0.98
+    _meta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bakeoff_data_aligned_v5", "metadata.json")
+    if os.path.exists(_meta):
+        thr = float(json.load(open(_meta)).get("touch_threshold", 0.98))
+    touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=thr)
             touch_rolled = np.clip(touch_time_rolled / 30.0, 0.0, 2.0)
             
             # Verify against stored touch_time
