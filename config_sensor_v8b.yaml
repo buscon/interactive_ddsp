@@ -40,8 +40,8 @@ model:
     enabled: true
     factor: 5.0          # k=5.0
     pre_ms: 100          # flat pre-roll before onset
-    window_ms: 600       # causal decaying window after onset
-    decay_tau_ms: 200    # decay time constant of the onset weight profile
+    window_ms: 800       # causal gamma window after onset
+    peak_ms: 350         # gamma peak — measured audio event jumps +10dB at ~330ms after 0.98 crossing
     touch_rate_hz: 100   # Touch feature rate
 
 # V7: Loss weights

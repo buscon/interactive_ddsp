@@ -854,15 +854,20 @@ class SensorDDSP(nn.Module):
         ow = self.onset_weighting
         k = ow.get('factor', 5.0)
         window_ms = ow.get('window_ms', 600)
-        tau_ms = ow.get('decay_tau_ms', 200)
+        tau_ms = ow.get('decay_tau_ms', 200)  # kept for back-compat
+        peak_ms = ow.get('peak_ms', 350)  # gamma peak: measured audio event at ~330-360ms after crossing
         pre_ms = ow.get('pre_ms', 100)
         rate = ow.get('touch_rate_hz', 100)
         onset = _onset_from_touch(touch)  # (B,T,1)
         T = onset.shape[1]
         klen = int(window_ms * rate / 1000) + 1
-        kern = torch.exp(-torch.arange(klen, device=onset.device).float() / (tau_ms * rate / 1000))
-        kern = kern / kern.sum()
-        kern = kern.flip(0)  # conv1d is cross-correlation: flip so the peak lands AT the onset, decaying forward
+        x = torch.arange(klen, device=onset.device).float()  # kernel position in frames
+        tau_f = max(1.0, peak_ms * rate / 1000)  # gamma peak position in frames
+        # gamma-shaped causal kernel: rises to peak at peak_ms, then decays (matches measured
+        # event-locked energy: HP log-RMS jumps +10dB at ~330ms after the 0.98 crossing)
+        kern = (x / tau_f) * torch.exp(1.0 - x / tau_f)
+        kern = kern / kern.sum().clamp(min=1e-8)
+        kern = kern.flip(0)  # conv1d is cross-correlation: flip so kernel start aligns with onset
         prof = F.conv1d(onset.transpose(1, 2), kern.view(1, 1, -1), padding=klen - 1)[..., :T].transpose(1, 2)
         pre_frames = int(pre_ms * rate / 1000)
         pre = torch.zeros_like(onset)

@@ -7,7 +7,7 @@ SCALES = [4096, 2048, 1024, 512, 256, 128]
 
 
 def test_window_direction():
-    m = SensorDDSP(f0_base_hz=F0, onset_weighting={'enabled': True, 'factor': 5.0, 'window_ms': 600, 'decay_tau_ms': 200, 'pre_ms': 100})
+    m = SensorDDSP(f0_base_hz=F0, onset_weighting={'enabled': True, 'factor': 5.0, 'window_ms': 800, 'peak_ms': 350, 'pre_ms': 100})
     touch = torch.zeros(1, 1000, 1)
     touch[:, 500, 0] = float(torch.log1p(torch.tensor(0.01)))  # fresh onset at frame 500
     touch[:, 501:, 0] = 1.0  # already in touch afterwards
@@ -19,7 +19,7 @@ def test_window_direction():
 
 
 def test_all_scales_see_onset():
-    m = SensorDDSP(f0_base_hz=F0, onset_weighting={'enabled': True, 'factor': 5.0, 'window_ms': 600, 'decay_tau_ms': 200, 'pre_ms': 100})
+    m = SensorDDSP(f0_base_hz=F0, onset_weighting={'enabled': True, 'factor': 5.0, 'window_ms': 800, 'peak_ms': 350, 'pre_ms': 100})
     touch = torch.zeros(1, 6000, 1)
     touch[:, 3000, 0] = float(torch.log1p(torch.tensor(0.01)))
     touch[:, 3001:, 0] = 1.0
@@ -33,7 +33,7 @@ def test_all_scales_see_onset():
 
 
 def test_rms_mask_no_crash():
-    m = SensorDDSP(f0_base_hz=F0, onset_weighting={'enabled': True, 'factor': 5.0, 'window_ms': 600, 'decay_tau_ms': 200, 'pre_ms': 100})
+    m = SensorDDSP(f0_base_hz=F0, onset_weighting={'enabled': True, 'factor': 5.0, 'window_ms': 800, 'peak_ms': 350, 'pre_ms': 100})
     touch = torch.zeros(1, 200, 3)
     touch[:, 50, 0] = float(torch.log1p(torch.tensor(0.01)))
     touch[:, 51:, 0] = 1.0
