@@ -58,9 +58,8 @@ train:
   eval_curves: [017, 018, 019, 020]  # held-out curves for evaluation
   save_every: 250
 
-# V7 protocol:
-# - stageB_v7_onsetw: onset-weighted multiscale loss
-# - Fine-tune from V6 baseline recommended:
-#   checkpoint: runs/bakeoff_ddsp_poc/stageB_v6/state_final.pth
-#   steps: 1000          # Fine-tune, not full retrain
-#   lr: 0.00003          # 0.3x baseline LR
+# Fine-tuning from V6 baseline (optional, set init_checkpoint to enable)
+finetune:
+  init_checkpoint: null  # Path to V6 checkpoint for fine-tuning (e.g., runs/bakeoff_ddsp_poc/stageB_v6/state_final.pth)
+  finetune_lr: 3.0e-4    # 0.3x baseline (1e-3 * 0.3)
+  finetune_steps: 1000   # Fine-tune duration

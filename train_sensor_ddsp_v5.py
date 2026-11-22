@@ -183,11 +183,18 @@ def main():
     p.add_argument("--no_restart", action="store_true")
     p.add_argument("--overfit_sound", default="03_harmonicSwarm")
     p.add_argument("--overfit_curve", default="001")
+    p.add_argument("--init_checkpoint", type=str, default=None,
+                   help='Path to checkpoint for fine-tuning (e.g., runs/bakeoff_ddsp_poc/stageB_v6/state_final.pth)')
     args = p.parse_args()
 
     # Load config
     with open(args.config) as f:
         config = yaml.safe_load(f)
+    
+    # Fine-tuning: check if checkpoint is specified (CLI overrides config)
+    finetune_config = config.get("finetune", {})
+    if args.init_checkpoint is None:
+        args.init_checkpoint = finetune_config.get("init_checkpoint", None)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
@@ -269,7 +276,32 @@ def main():
         if "w_attack" in config.get("model", {}):
             model.w_attack = config["model"]["w_attack"]
         print(f"Loss weights: w_mod_spec={model.w_mod_spec}, w_attack={model.w_attack}")
-        
+
+        # Load checkpoint for fine-tuning if specified
+        if args.init_checkpoint:
+            print(f"\nLoading checkpoint for fine-tuning: {args.init_checkpoint}")
+            checkpoint = torch.load(args.init_checkpoint, map_location=device)
+            
+            # Load model state
+            model.load_state_dict(checkpoint['model'])
+            print(f"  Loaded model state from step {checkpoint.get('step', 'unknown')}")
+            
+            # Set start step for logging (for resuming training progress)
+            start_step = checkpoint.get('step', 0)
+            print(f"  Fine-tuning from step {start_step}")
+        else:
+            start_step = 0
+
+        # Fine-tuning: determine effective steps
+        is_finetune = args.init_checkpoint is not None
+        if is_finetune:
+            ft_steps = finetune_config.get("finetune_steps", 1000)
+            # Use CLI steps if provided, otherwise use config fine-tune steps
+            effective_steps = args.steps if args.steps != 800 else ft_steps
+            print(f"Fine-tuning: using {effective_steps} steps (config: {ft_steps} steps)")
+        else:
+            effective_steps = args.steps
+
         print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
         # Create datasets
@@ -366,6 +398,16 @@ def main():
             lr_start = 3e-4
             decay_over = 1000  # Don't decay during overfit
         
+        # Fine-tuning: apply 0.3x learning rate (already set above)
+        if is_finetune:
+            # Use fine-tune LR from config if specified, otherwise 0.3x baseline
+            ft_lr = finetune_config.get("finetune_lr", None)
+            if ft_lr is not None:
+                lr_start = ft_lr
+            else:
+                lr_start = lr_start * 0.3
+            print(f"Fine-tuning mode: LR = {lr_start:.6e} (0.3x baseline)")
+        
         opt = torch.optim.Adam(model.parameters(), lr=lr_start)
         step = 0
         timing_window = 25
@@ -376,10 +418,17 @@ def main():
         max_grad_norm = 5.0
 
         # LR scheduler: warm-up then constant (based on diag_curr.py)
-        def lr_at(step):
-            # Warm-up for first 100 steps: min(1.0, (step+1)/100)
-            warmup = min(1.0, (step + 1) / 100.0)
-            return lr_start * warmup
+        # For fine-tuning: use constant LR without warmup (or cosine decay)
+        if is_finetune:
+            # Fine-tuning: constant LR (0.3x baseline), no warmup
+            def lr_at(step):
+                return lr_start
+        else:
+            # Full training: warm-up then decay
+            def lr_at(step):
+                # Warm-up for first 100 steps: min(1.0, (step+1)/100)
+                warmup = min(1.0, (step + 1) / 100.0)
+                return lr_start * warmup
 
         # Training loop
         step = 0
@@ -390,7 +439,7 @@ def main():
         scales = config["train"]["scales"]
         overlap = config["train"]["overlap"]
         
-        print(f"\nStarting training for {args.steps} steps")
+        print(f"\nStarting training for {effective_steps} steps")
         print(f"Train dataset: {len(train_dataset)} items")
         print(f"Val dataset: {len(val_dataset)} items")
         print(f"Val evaluation every {args.eval_every} steps")
@@ -411,9 +460,9 @@ def main():
             print(f"Initial val_loss: {val_loss:.6f}, silence_loss: {silence_loss:.6f}")
             model.train()  # Reset to train mode after eval
         
-        for epoch in range((args.steps // len(train_loader)) + 2):
+        for epoch in range((effective_steps // len(train_loader)) + 2):
             for batch in train_loader:
-                if step >= args.steps:
+                if step >= effective_steps:
                     break
                     
                 # Update LR
@@ -567,30 +616,30 @@ def main():
                 
                 step += 1
             
-            if step >= args.steps:
+            if step >= effective_steps:
                 break
             
             if collapse_detected and not args.no_restart and restart_num < max_restarts - 1:
                 break  # Restart
-        
-        if step >= args.steps:
+         
+        if step >= effective_steps:
             break
-        
+         
         if collapse_detected and not args.no_restart and restart_num < max_restarts - 1:
             print(f"  Restarting training with seed {args.seed + restart_num + 1}")
             # Reset optimizer, step, and last_print_step before restarting
             opt = torch.optim.Adam(model.parameters(), lr=lr_start)
-            step = 0
+            step = start_step  # Continue from checkpoint step
             timing_window = 25
             start_time = None
             step_count = 0
-            last_print_step = 0
+            last_print_step = start_step
             continue  # Restart
     
     # End of restart loop - final evaluation runs only on normal completion (not on restart)
-    if step >= args.steps:
+    if step >= effective_steps:
         # Final evaluation at last step (step 60)
-        if step != args.steps - 1:
+        if step != effective_steps - 1:
             # Eval at last step
             val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
                 model, val_items, chunk_s, scales, overlap, device
@@ -758,7 +807,7 @@ def main():
                 "sound": args.overfit_sound,
                 "curve": args.overfit_curve,
                 "seed": args.seed,
-                "steps": args.steps,
+                "steps": effective_steps,
                 "silence_loss": silence_loss,
                 "final_loss": final_loss,
                 "rms_ratio": rms_ratio,
