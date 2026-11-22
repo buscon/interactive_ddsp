@@ -32,12 +32,13 @@ model:
   lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
   
   # V7: Onset weighting parameters
-  # NOTE (audibility report): touch modulation is gradual, not sharp attack.
-  # Consider extending window_ms to 300-500ms in a follow-up experiment.
+  # Full-dataset audibility (230 onsets): RMS ratio post/pre peaks at 500ms window
+  # (median 2.58x, 63% of onsets >2x). 50-300ms shows ~0.9x dip. Window set to 500ms
+  # to capture the percussive touch layer (Env.perc attack 0.01s, decay 0.3-0.5s).
   onset_weighting:
     enabled: true
-    factor: 5.0          # k=5.0 (agreed with Claude analysis)
-    window_ms: 150       # 150ms window after onset (audibility suggests 300-500ms)
+    factor: 5.0          # k=5.0
+    window_ms: 500       # 500ms window after onset (captures full attack energy)
     dilate_frames: 1     # ±1 STFT frame
     touch_rate_hz: 100   # Touch feature rate
 
