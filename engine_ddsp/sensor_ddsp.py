@@ -301,7 +301,7 @@ class SensorDDSP(nn.Module):
         # V8c: SC-formula vibrato with lagged timer: t_sc = clamp(t_sec - lag, 0) * in_touch
         # canopy SC: depth_add = clip(0.5*t, 0, 20); rate = 1 + clip(0.3*t, 1, 30)
         t_sc = (t_sec_raw - lag).clamp(min=0) * in_t                       # (B,T,1)
-        depth_add_t = (0.5 * t_sc).clamp(max=20.0) + 0.1 * depth_add_emb[sound_id].view(-1, 1, 1)
+        depth_add_t = (0.5 * t_sc).clamp(max=20.0) + 0.1 * depth_add_emb.view(-1, 1, 1)  # emb already indexed (B,)
         rate_t = 1.0 + (0.3 * t_sc).clamp(1.0, 30.0) + 0.1 * rate_emb.view(-1, 1, 1)  # (B,T,1) Hz
         phase = torch.cumsum(rate_t.squeeze(-1) / 100.0, dim=1)            # (B,T) cycles, time-varying rate
         sin_phase = torch.sin(2 * torch.pi * phase).unsqueeze(-1)           # (B,T,1)
