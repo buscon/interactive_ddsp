@@ -150,6 +150,8 @@ class SensorDDSP(nn.Module):
         with torch.no_grad():
             self.fast_head.weight.zero_()
             self.fast_head.bias.zero_()
+        # V8c: per-sound attack lag (audio event lands ~+0.4s after the 0.98 crossing; Task 2 refines)
+        self.register_buffer('attack_lag_s', torch.tensor([0.38, 0.38, 0.42, 0.245, 0.39]))  # measured per-sound attack lag (attack_lag_report.json)
         
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
@@ -192,6 +194,9 @@ class SensorDDSP(nn.Module):
         for name, p in self.named_parameters():
             if name.startswith('fast_head.') and (prefix + name) not in state_dict:
                 state_dict[prefix + name] = p.detach().clone()
+        for name, b in self.named_buffers():
+            if name == 'attack_lag_s' and (prefix + name) not in state_dict:
+                state_dict[prefix + name] = b.detach().clone()  # V8c: new buffer, default per-sound lag
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
                                       missing_keys, unexpected_keys, error_msgs)
 
@@ -246,12 +251,16 @@ class SensorDDSP(nn.Module):
         # Heads
         harmonic_param = self.harmonic_head(mlp_out)  # (B, T, n_harmonic+1)
         noise_param = self.noise_head(mlp_out)        # (B, T, n_bands)
-        # V8b: fast-decay touch envelope -> direct additive amp contribution (locked to touch)
-        t_sec_raw = torch.expm1(touch[..., :1].clamp(min=0))
+        # V8c: fast-decay touch envelope -> direct additive amp contribution, DELAYED by attack lag
+        t_sec_raw = torch.expm1(touch[..., :1].clamp(min=0))          # (B,T,1) seconds in touch
         in_t = (t_sec_raw > 0).float()
-        fast = torch.cat([in_t * torch.exp(-t_sec_raw / 0.03),
-                          in_t * torch.exp(-t_sec_raw / 0.1),
-                          in_t * torch.exp(-t_sec_raw / 0.3)], dim=-1)  # (B,T,3)
+        lag = self.attack_lag_s[sound_id].view(-1, 1, 1)               # (B,1,1)
+        t_d = t_sec_raw - lag                                           # time since attack (negative before lag / out of touch)
+        gate = in_t * (t_d >= 0).float()                                # active only in-touch AND after lag
+        t_dc = t_d.clamp(min=0)
+        fast = torch.cat([gate * torch.exp(-t_dc / 0.03),
+                          gate * torch.exp(-t_dc / 0.1),
+                          gate * torch.exp(-t_dc / 0.3)], dim=-1)  # (B,T,3)
         fh = self.fast_head(fast)
         harmonic_param = harmonic_param + fh[..., :self.harmonic_head.out_features]
         noise_param = noise_param + fh[..., self.harmonic_head.out_features:]
@@ -289,17 +298,17 @@ class SensorDDSP(nn.Module):
         depth_add_emb = self.lfo_depth_add_emb(sound_id).squeeze(-1)  # (B,)
         depth_add = depth_add_base + depth_add_emb  # (B,), additive depth (Hz)
         
-        # Phase accumulation: rate in Hz, converted to per-frame phase increment
-        # rate is (B,) - need to broadcast to (B, T) for per-frame accumulation
-        rate_broadcast = rate.unsqueeze(-1).expand(-1, T)  # (B, 1) -> (B, T)
-        phase = torch.cumsum(rate_broadcast / 100.0, dim=1)  # (B, T) cycles
-        sin_phase = torch.sin(2 * torch.pi * phase)  # (B, T)
-        
-        # Hybrid LFO: f0 *= (1 + depth_mul * sin) + depth_add * sin
-        # depth_mul and depth_add are (B,) - unsqueeze to (B, 1, 1) for proper broadcasting
-        f0 = f0 * (1.0 + in_touch * depth_mul.unsqueeze(-1).unsqueeze(-1) * sin_phase.unsqueeze(-1))
-        # Additive FM component
-        f0 = f0 + in_touch * depth_add.unsqueeze(-1).unsqueeze(-1) * sin_phase.unsqueeze(-1)
+        # V8c: SC-formula vibrato with lagged timer: t_sc = clamp(t_sec - lag, 0) * in_touch
+        # canopy SC: depth_add = clip(0.5*t, 0, 20); rate = 1 + clip(0.3*t, 1, 30)
+        t_sc = (t_sec_raw - lag).clamp(min=0) * in_t                       # (B,T,1)
+        depth_add_t = (0.5 * t_sc).clamp(max=20.0) + 0.1 * depth_add_emb[sound_id].view(-1, 1, 1)
+        rate_t = 1.0 + (0.3 * t_sc).clamp(1.0, 30.0) + 0.1 * rate_emb.view(-1, 1, 1)  # (B,T,1) Hz
+        phase = torch.cumsum(rate_t.squeeze(-1) / 100.0, dim=1)            # (B,T) cycles, time-varying rate
+        sin_phase = torch.sin(2 * torch.pi * phase).unsqueeze(-1)           # (B,T,1)
+
+        # Hybrid LFO: multiplicative depth + additive FM, gated by in_touch (no wobble before touch)
+        f0 = f0 * (1.0 + in_touch * depth_mul.unsqueeze(-1).unsqueeze(-1) * sin_phase)
+        f0 = f0 + in_touch * depth_add_t * sin_phase
         
         # Clamp f0 to valid range to prevent NaN from log2 or overflow
         f0 = torch.clamp(f0, 20.0, 2000.0)
@@ -497,13 +506,13 @@ class SensorDDSP(nn.Module):
             block = self.block_size
             idx = torch.clamp((torch.arange(n_frames, device=device) * hop) // block, max=touch.shape[1] - 1)
             w = 1.0 + 0.5 * (touch[:, idx, 0] > 2.0/30.0).float()  # (B, frames)
-            return w.unsqueeze(-1)  # (B, frames, 1)
+            return w.unsqueeze(1)  # V8c: (B, 1, frames) to broadcast with (B, freqs, frames)
 
         lin_loss = 0.0
         lg_loss = 0.0
         wsum = 0.0
         for s, p_s, t_s in zip(scales, pred_stft, target_stft):
-            w = frame_weights(s, p_s.shape[1], p_s.shape[0], p_s.device)
+            w = frame_weights(s, p_s.shape[2], p_s.shape[0], p_s.device)  # V8c: shape[2]=frames (was shape[1]=freqs)
             if w is not None:
                 d_lin = (p_s - t_s).abs()
                 d_lg = (safe_log(p_s + 1e-5) - safe_log(t_s + 1e-5)).abs()
@@ -536,7 +545,7 @@ class SensorDDSP(nn.Module):
                 hop = int(scale * (1 - overlap))
                 w_s = self._profile_to_stft(w100, p_s.shape[2], hop)  # (B, frames, 1)
                 w_e = w_s.unsqueeze(1)  # (B, 1, frames, 1)
-                wsum = w_e.sum().clamp(min=1e-6)
+                wsum = w_e.sum().clamp(min=1e-6) * p_s.shape[1]  # V8c: divide by freq bins too -> mean over freqs
                 d_lin = (p_s - t_s).abs()
                 d_lg = (safe_log(p_s + 1e-5) - safe_log(t_s + 1e-5)).abs()
                 lin_loss_w = lin_loss_w + (d_lin.unsqueeze(-1) * w_e).sum() / wsum
