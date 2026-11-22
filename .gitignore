@@ -20,3 +20,4 @@ __pycache__/
 *.npy
 *.pth
 !docs/**
+bakeoff_data_aligned_v8/
