@@ -281,7 +281,8 @@ def main():
             root, split="train", chunk_s=chunk_s, 
             sounds=config["data"]["train_sounds"],
             curves=config["data"]["train_curves"],
-            epoch_len=None, seed=args.seed + restart_num, train=True
+            epoch_len=None, seed=args.seed + restart_num, train=True,
+            notes_json=config["data"].get("notes_json", None)
         )
         
         # Validation dataset
@@ -289,7 +290,8 @@ def main():
             root, split="val", chunk_s=chunk_s,
             sounds=config["data"]["val_sounds"],
             curves=config["data"]["val_curves"],
-            epoch_len=None, seed=args.seed + restart_num, train=False
+            epoch_len=None, seed=args.seed + restart_num, train=False,
+            notes_json=config["data"].get("notes_json", None)
         )
 
         # Overfit mode: use one fixed file

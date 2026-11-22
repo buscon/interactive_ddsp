@@ -8,6 +8,8 @@ data:
   val_sounds: null
   train_curves: null  # null = all in train split
   val_curves: null
+  # V7: Audio-derived onsets (replaces sensor-derived)
+  notes_json: /home/marcello/Documents/interactive_ddsp/bakeoff_notes_v5_audio.json
 
 model:
   n_sounds: 5

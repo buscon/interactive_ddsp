@@ -9,12 +9,22 @@ import numpy as np
 import json as _json
 
 _NOTES = None
-def _notes():
+_NOTES_PATH = None
+
+def _set_notes_path(path: str):
+    """Set the notes JSON path for reloading."""
+    global _NOTES_PATH
+    _NOTES_PATH = path
     global _NOTES
+    _NOTES = None  # Force reload
+
+def _notes():
+    global _NOTES, _NOTES_PATH
     if _NOTES is None:
         import os
-        p = os.path.join(os.path.dirname(__file__), "..", "bakeoff_notes_v5.json")
-        _NOTES = _json.load(open(p)) if os.path.exists(p) else {}
+        if _NOTES_PATH is None:
+            _NOTES_PATH = os.path.join(os.path.dirname(__file__), "..", "bakeoff_notes_v5.json")
+        _NOTES = _json.load(open(_NOTES_PATH)) if os.path.exists(_NOTES_PATH) else {}
     return _NOTES
 
 import librosa
@@ -36,13 +46,16 @@ class AlignedChunkDatasetV5(Dataset):
     - audio chunk: audio[480*offset : 480*(offset+F)]
     - sensor chunk: sensor[offset:offset+F]
     - touch chunk: touch_time[offset:offset+F]
+    
+    Notes:
+    - Onset labels are loaded from bakeoff_notes_v5.json or custom notes_json path
     """
     
     PROVENANCE_ROOT = "/home/marcello/sentire/Recordings/Dataset_20261121_134808"
     PROVENANCE_N_FILES = 100
     
     def __init__(self, root, split, chunk_s=10.0, sounds=None, curves=None,
-                 epoch_len=None, seed=0, train=True):
+                 epoch_len=None, seed=0, train=True, notes_json=None):
         """
         Args:
             root: path to bakeoff_data_aligned_v5
@@ -53,7 +66,12 @@ class AlignedChunkDatasetV5(Dataset):
             epoch_len: number of items per epoch (default: n_files * 20 for train)
             seed: random seed for shuffling
             train: True for random chunks, False for deterministic non-overlapping
+            notes_json: path to notes JSON file (default: bakeoff_notes_v5.json)
         """
+        # Set notes path if provided
+        if notes_json is not None:
+            _set_notes_path(notes_json)
+        
         self.root = root
         self.split = split
         self.chunk_s = chunk_s
