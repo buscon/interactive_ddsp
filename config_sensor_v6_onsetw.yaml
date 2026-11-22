@@ -8,8 +8,8 @@ data:
   val_sounds: null
   train_curves: null  # null = all in train split
   val_curves: null
-  # V7: Audio-derived onsets (replaces sensor-derived)
-  notes_json: /home/marcello/Documents/interactive_ddsp/bakeoff_notes_v5_audio.json
+  # V7: Touch onsets from sensor crossing 0.98 (OSC touch trigger)
+  notes_json: /home/marcello/Documents/interactive_ddsp/bakeoff_notes_v7.json
 
 model:
   n_sounds: 5
@@ -32,10 +32,12 @@ model:
   lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
   
   # V7: Onset weighting parameters
+  # NOTE (audibility report): touch modulation is gradual, not sharp attack.
+  # Consider extending window_ms to 300-500ms in a follow-up experiment.
   onset_weighting:
     enabled: true
     factor: 5.0          # k=5.0 (agreed with Claude analysis)
-    window_ms: 150       # 150ms window after onset
+    window_ms: 150       # 150ms window after onset (audibility suggests 300-500ms)
     dilate_frames: 1     # ±1 STFT frame
     touch_rate_hz: 100   # Touch feature rate
 
@@ -58,8 +60,8 @@ train:
   eval_curves: [017, 018, 019, 020]  # held-out curves for evaluation
   save_every: 250
 
-# Fine-tuning from V6 baseline (optional, set init_checkpoint to enable)
+# Fine-tuning from V6 baseline (enable by setting init_checkpoint or using --init_checkpoint)
 finetune:
-  init_checkpoint: null  # Path to V6 checkpoint for fine-tuning (e.g., runs/bakeoff_ddsp_poc/stageB_v6/state_final.pth)
+  init_checkpoint: runs/bakeoff_ddsp_poc/stageB_v6/state_final.pth  # V6 baseline for fine-tuning
   finetune_lr: 3.0e-4    # 0.3x baseline (1e-3 * 0.3)
   finetune_steps: 1000   # Fine-tune duration
