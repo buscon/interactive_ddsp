@@ -6,6 +6,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .synth import (
     scale_function, remove_above_nyquist, upsample,
     harmonic_synth, amp_to_impulse_response, fft_convolve,
@@ -39,7 +40,7 @@ class SensorDDSP(nn.Module):
     def __init__(self, f0_base_hz, n_sounds=5, hidden_size=512,
                  n_harmonic=100, n_bands=65, sampling_rate=48000,
                  block_size=480, sound_emb_dim=16, max_f0_octaves=1.0,
-                 tilt_init=True):
+                 tilt_init=True, onset_weighting=None):
         """
         Args:
             f0_base_hz: list of base f0 per sound ID (len = n_sounds)
@@ -52,6 +53,12 @@ class SensorDDSP(nn.Module):
             sound_emb_dim: sound embedding dimension
             max_f0_octaves: max f0 deviation in octaves (tanh output * this)
             tilt_init: if True, apply tilt initialization to heads
+            onset_weighting: dict with keys:
+                - enabled: bool
+                - factor: float (k=5.0)
+                - window_ms: int (150)
+                - dilate_frames: int (1)
+                - touch_rate_hz: int (100)
         """
         super().__init__()
         
@@ -66,6 +73,24 @@ class SensorDDSP(nn.Module):
         self.w_mod_spec = 0.0   # v5 experimental losses default OFF (v5 run regressed: val 28.3 > silence 23.2)
         self.w_attack = 0.0
         self.tilt_init = tilt_init
+        
+        # Onset weighting parameters
+        if onset_weighting is None:
+            self.onset_weighting = {
+                'enabled': False,
+                'factor': 5.0,
+                'window_ms': 150,
+                'dilate_frames': 1,
+                'touch_rate_hz': 100
+            }
+        else:
+            self.onset_weighting = {
+                'enabled': onset_weighting.get('enabled', False),
+                'factor': onset_weighting.get('factor', 5.0),
+                'window_ms': onset_weighting.get('window_ms', 150),
+                'dilate_frames': onset_weighting.get('dilate_frames', 1),
+                'touch_rate_hz': onset_weighting.get('touch_rate_hz', 100)
+            }
         
         # Register f0_base as buffer (per sound)
         self.register_buffer(
@@ -642,6 +667,193 @@ class SensorDDSP(nn.Module):
         zeros = torch.zeros(B, L, dtype=target.dtype, device=target.device)
         return self.loss_fn(zeros, target, scales, overlap)
 
+    def _compute_onset_weights(self, touch, stft_scales, B, device):
+        """
+        Compute onset-weighted frame weights for multiscale loss.
+        
+        Args:
+            touch: (B, T, 3) touch features at 100 Hz
+            stft_scales: list of STFT window sizes
+            B: batch size
+            device: torch device
+            
+        Returns:
+            dict mapping scale -> (B, frames, 1) frame weights
+        """
+        if not self.onset_weighting['enabled']:
+            return {scale: None for scale in stft_scales}
+        
+        if touch is None or touch.shape[-1] < 1:
+            return {scale: None for scale in stft_scales}
+        
+        # Derive touch_onset from touch (first channel is log1p(t) which > 0 iff t > 0)
+        t_ch = touch[..., :1]  # (B, T, 1)
+        touch_onset = torch.zeros_like(t_ch)
+        touch_onset[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
+        touch_onset[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+        
+        # touch_onset is (B, T, 1) at 100 Hz
+        
+        # For each STFT scale, compute downsampled onset weights
+        weights_dict = {}
+        for scale in stft_scales:
+            # STFT frame rate = sampling_rate / hop_size where hop = scale * (1 - overlap)
+            hop = int(scale * (1 - 0.75))  # 0.75 is the standard overlap
+            stft_frame_rate = self.sampling_rate / hop
+            
+            # Downsample factor: 100 Hz -> STFT frame rate
+            downsample_factor = int(self.onset_weighting['touch_rate_hz'] / stft_frame_rate)
+            if downsample_factor < 1:
+                downsample_factor = 1
+            
+            # Max-pool over touch frames corresponding to each STFT frame
+            # touch_onset: (B, T, 1) -> (B, 1, T) for pool
+            touch_onset_flat = touch_onset.squeeze(-1)  # (B, T)
+            touch_onset_pooled = F.max_pool1d(
+                touch_onset_flat.unsqueeze(1),  # (B, 1, T)
+                kernel_size=downsample_factor,
+                stride=downsample_factor,
+            ).squeeze(1).unsqueeze(-1)  # (B, T_stft, 1)
+            
+            # Dilate by ±dilate_frames using max-pooling
+            dilate_frames = self.onset_weighting['dilate_frames']
+            if dilate_frames > 0:
+                # Use max-pooling with kernel size to get local max
+                kernel_size = 2 * dilate_frames + 1
+                touch_onset_pooled = F.max_pool1d(
+                    touch_onset_pooled.transpose(1, 2),  # (B, 1, T)
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=dilate_frames
+                ).transpose(1, 2)  # (B, T, 1)
+            
+            # Create onset window (window_ms after each onset)
+            window_ms = self.onset_weighting['window_ms']
+            window_frames = int(window_ms / 1000 * stft_frame_rate)
+            if window_frames < 1:
+                window_frames = 1
+            
+            # Build onset window: for each onset frame, weight subsequent frames
+            T_stft = touch_onset_pooled.shape[1]
+            onset_weight = torch.zeros(B, T_stft, 1, device=device)
+            
+            for j in range(window_frames):
+                if j == 0:
+                    onset_weight += touch_onset_pooled * self.onset_weighting['factor']
+                else:
+                    shifted = F.pad(touch_onset_pooled[:, :-j, :], (0, 0, 0, j))
+                    onset_weight += shifted * self.onset_weighting['factor']
+            
+            # Final weight: 1.0 + onset_weight (baseline + boost)
+            frame_weights = 1.0 + onset_weight
+            
+            weights_dict[scale] = frame_weights
+        
+        return weights_dict
+
+    def loss(self, batch, return_losses=False):
+        """
+        Compute loss with optional onset weighting.
+        
+        New config params:
+        - onset_weighting.enabled: bool
+        - onset_weighting.factor: float (k=5.0)
+        - onset_weighting.window_ms: int (150)
+        - onset_weighting.dilate_frames: int (1)
+        - onset_weighting.touch_rate_hz: int (100)
+        
+        Args:
+            batch: dict with 'audio', 'sensor', 'touch', 'sound_id' keys
+            return_losses: if True, return dict of individual loss components
+            
+        Returns:
+            scalar loss or (scalar loss, dict of losses)
+        """
+        # Forward pass
+        # Sensor is already (B, T, 1), touch is (B, T, 3)
+        sensor = batch['sensor']
+        touch = batch['touch']
+        sound_id = batch['sound_id']
+        note = batch.get('note', None)
+        
+        pred = self(sensor, touch, sound_id, note=note).squeeze(-1)
+        target = batch['audio']
+        
+        # Scales from model config (use defaults if not set)
+        scales = [4096, 2048, 1024, 512, 256, 128]
+        overlap = 0.75
+        
+        # Compute multiscale loss per frame with onset weighting
+        multiscale_losses = []
+        for i, scale in enumerate(scales):
+            # Compute STFT for this scale
+            pred_stft = multiscale_fft(pred, [scale], overlap)
+            target_stft = multiscale_fft(target, [scale], overlap)
+            
+            # pred_stft is list of (B, frames, freqs) tensors
+            pred_s = pred_stft[0]  # (B, frames, freqs)
+            target_s = target_stft[0]  # (B, frames, freqs)
+            
+            # Per-frame loss: L1 on magnitude + L1 on log magnitude
+            per_frame_loss = (pred_s - target_s).abs() + (safe_log(pred_s + 1e-5) - safe_log(target_s + 1e-5)).abs()
+            # per_frame_loss: (B, frames, freqs)
+            
+            # Apply onset weighting if enabled
+            if self.onset_weighting['enabled'] and 'touch' in batch:
+                # Get pre-computed weights for this scale
+                weights_dict = self._compute_onset_weights(touch, scales[:i+1], pred.shape[0], pred.device)
+                frame_weights = weights_dict[scale]
+                
+                if frame_weights is not None:
+                    # Ensure weights align with per_frame_loss shape
+                    # frame_weights: (B, frames, 1), per_frame_loss: (B, frames, freqs)
+                    if frame_weights.shape[1] != per_frame_loss.shape[1]:
+                        # Interpolate or crop to match
+                        frame_weights = F.interpolate(
+                            frame_weights.transpose(1, 2),
+                            size=per_frame_loss.shape[1],
+                            mode='nearest'
+                        ).transpose(1, 2)
+                    
+                    # Compute per-frame mean across freqs
+                    per_frame_mean = per_frame_loss.mean(dim=-1, keepdim=True)  # (B, frames, 1)
+                    # Apply weights
+                    weighted_per_frame = per_frame_mean * frame_weights
+                    loss_i = weighted_per_frame.mean()
+                else:
+                    loss_i = per_frame_loss.mean()
+            else:
+                loss_i = per_frame_loss.mean()
+            
+            multiscale_losses.append(loss_i)
+        
+        multiscale_loss = sum(multiscale_losses) / len(multiscale_losses)
+        
+        # Compute other loss components
+        result = {'multiscale': multiscale_loss}
+        
+        # RMS envelope loss
+        pred_log_rms = self.frame_log_rms(pred)
+        target_log_rms = self.frame_log_rms(target)
+        rms_loss = (pred_log_rms - target_log_rms).abs().mean()
+        result['rms'] = rms_loss
+        
+        total = multiscale_loss + rms_loss
+        
+        # Attack loss (if not using onset weighting)
+        if not self.onset_weighting['enabled'] and 'touch' in batch and touch.shape[-1] >= 3:
+            t_ch = touch[..., :1]
+            touch_onset_from_touch = torch.zeros_like(t_ch)
+            touch_onset_from_touch[..., 1:, :] = ((t_ch[..., 1:, :] > 0) & (t_ch[..., :-1, :] == 0)).float()
+            touch_onset_from_touch[..., 0, :] = (t_ch[..., 0, :] > 0).float()
+            atk_loss = self.attack_loss(pred, target, touch_onset_from_touch, 0)  # step=0 for simplicity
+            result['attack'] = atk_loss
+            total = total + self.w_attack * atk_loss
+        
+        if return_losses:
+            return total, result
+        return total
+
 
 if __name__ == "__main__":
     # Quick test
@@ -665,3 +877,14 @@ if __name__ == "__main__":
         model_tilt = SensorDDSP(f0_base, tilt_init=True)
         print(f"Tilt init harmonic_head weight range: {model_tilt.harmonic_head.weight.min().item():.6f} to {model_tilt.harmonic_head.weight.max().item():.6f}")
         print(f"Tilt init harmonic_head bias: {model_tilt.harmonic_head.bias[:5].tolist()}")
+        
+        # Test onset weighting
+        model_onsetw = SensorDDSP(f0_base, onset_weighting={'enabled': True, 'factor': 5.0})
+        batch = {
+            'sensor': sensor,
+            'touch': torch.randn(B, T, 3),
+            'sound_id': sound_id,
+        }
+        loss, losses = model_onsetw.loss(batch, return_losses=True)
+        print(f"Onset-weighted loss: {loss.item():.6f}")
+        print(f"Loss components: {losses}")
