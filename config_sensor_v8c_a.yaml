@@ -1,0 +1,71 @@
+# V8c Arm A — Opus fixes only (loss norm, vibrato lag, fast_head lag+10x lr)
+# V8b config — data rebuilt at touch threshold 0.98, causal onset-weighted spectral+RMS loss
+# V7 Onset-Weighted Multiscale Config
+# Inherits from V6 baseline, adds onset weighting
+
+data:
+  root: /home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned_v8
+  chunk_s: 10.0
+  train_sounds: null  # null = all
+  val_sounds: null
+  train_curves: null  # null = all in train split
+  val_curves: null
+  # V7: Touch onsets from sensor crossing 0.98 (OSC touch trigger)
+  notes_json: /home/marcello/Documents/interactive_ddsp/bakeoff_notes_v7.json
+
+model:
+  n_sounds: 5
+  hidden_size: 512
+  n_harmonic: 100
+  n_bands: 65
+  sampling_rate: 48000
+  block_size: 480
+  sound_emb_dim: 16
+  max_f0_octaves: 2.0
+  # f0 roots from Sentire SC sources (sound_id order: canopy, forestPad, swarm, percussion, moss)
+  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+  
+  # v5/v6: LFO base tables (per sound) - from SC sources
+  # canopy: rate=1+clip(0.3t,1,30), depth_add=0.5t clip 0..20 (additive FM)
+  # swarm: rate=0.1+0.03t, depth_mul=(0.3+0.8t)% multiplicative
+  # forestPad/moss/percussion: no LFO
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
+  
+  # V7: Onset weighting parameters
+  # Full-dataset audibility (230 onsets): RMS ratio post/pre peaks at 500ms window
+  # (median 2.58x, 63% of onsets >2x). 50-300ms shows ~0.9x dip. Window set to 500ms
+  # to capture the percussive touch layer (Env.perc attack 0.01s, decay 0.3-0.5s).
+  onset_weighting:
+    enabled: true
+    factor: 5.0          # k=5.0
+    pre_ms: 100          # flat pre-roll before onset
+    window_ms: 800       # causal gamma window after onset
+    peak_ms: 400         # gamma peak — measured audio event jumps +10dB at ~330ms after 0.98 crossing
+    touch_rate_hz: 100   # Touch feature rate
+
+# V7: Loss weights
+loss_weights:
+  w_multiscale: 1.0
+  w_attack: 0.0          # Keep OFF (ablation proved harmful)
+  w_mod_spec: 0.0        # Keep OFF
+
+train:
+  batch: 8
+  lr_start: 1.0e-3
+  lr_stop: 1.0e-4
+  decay_over: 1000  # steps
+  scales: [4096, 2048, 1024, 512, 256, 128]
+  overlap: 0.75
+  steps: 2000
+  seed: 0
+  eval_every: 250
+  eval_curves: [017, 018, 019, 020]  # held-out curves for evaluation
+  save_every: 250
+
+# Fine-tuning from V6 baseline (enable by setting init_checkpoint or using --init_checkpoint)
+finetune:
+  init_checkpoint: runs/bakeoff_ddsp_poc/stageB_v8b/state_final.pth  # V6 baseline for fine-tuning
+  finetune_lr: 3.0e-4    # 0.3x baseline (1e-3 * 0.3)
+  finetune_steps: 3000   # Fine-tune duration

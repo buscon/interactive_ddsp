@@ -412,7 +412,13 @@ def main():
                 lr_start = lr_start * 0.3
             print(f"Fine-tuning mode: LR = {lr_start:.6e} (0.3x baseline)")
         
-        opt = torch.optim.Adam(model.parameters(), lr=lr_start)
+        # V8c: fast_head gets its own param group at 10x lr so the transient path can actually learn
+        _fh = [p for n, p in model.named_parameters() if n.startswith('fast_head.')]
+        _rest = [p for n, p in model.named_parameters() if not n.startswith('fast_head.')]
+        opt = torch.optim.Adam([
+            {'params': _rest, 'lr': lr_start, 'base_lr': lr_start},
+            {'params': _fh, 'lr': lr_start * 10.0, 'base_lr': lr_start * 10.0},
+        ])
         step = 0
         timing_window = 25
         start_time = None
@@ -471,7 +477,8 @@ def main():
                     
                 # Update LR
                 for g in opt.param_groups:
-                    g["lr"] = lr_at(step)
+                    # V8c: scale each group from its own base_lr (fast_head group is 10x)
+                    g["lr"] = g.get("base_lr", lr_start) * (lr_at(step) / lr_start if lr_start > 0 else 1.0)
                 
                 # Move to device
                 audio = batch["audio"].to(device)
@@ -632,7 +639,13 @@ def main():
         if collapse_detected and not args.no_restart and restart_num < max_restarts - 1:
             print(f"  Restarting training with seed {args.seed + restart_num + 1}")
             # Reset optimizer, step, and last_print_step before restarting
-            opt = torch.optim.Adam(model.parameters(), lr=lr_start)
+            # V8c: fast_head gets its own param group at 10x lr so the transient path can actually learn
+            _fh = [p for n, p in model.named_parameters() if n.startswith('fast_head.')]
+            _rest = [p for n, p in model.named_parameters() if not n.startswith('fast_head.')]
+            opt = torch.optim.Adam([
+                {'params': _rest, 'lr': lr_start, 'base_lr': lr_start},
+                {'params': _fh, 'lr': lr_start * 10.0, 'base_lr': lr_start * 10.0},
+            ])
             step = start_step  # Continue from checkpoint step
             timing_window = 25
             start_time = None
