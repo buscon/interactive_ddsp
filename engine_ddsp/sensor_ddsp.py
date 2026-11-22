@@ -524,33 +524,27 @@ class SensorDDSP(nn.Module):
 
         total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
 
-        # Onset-weighted multiscale spectral loss (V7 addition)
-        # Compute multiscale losses per scale (B, freqs, frames)
-        multiscale_losses = []
-        for p_s, t_s in zip(pred_stft, target_stft):
-            # L1 on magnitude + L1 on log magnitude per frame
-            per_frame_loss = (p_s - t_s).abs() + (safe_log(p_s + 1e-5) - safe_log(t_s + 1e-5)).abs()
-            multiscale_losses.append(per_frame_loss)
-        
-        # Apply onset weighting if enabled (V8b: one 100 Hz profile, shared by spectral + RMS terms)
+        # Onset-weighted spectral + RMS loss (V8b: one 100 Hz profile, shared; lin/lg weighted
+        # separately so the 100x lin / ramped-w lg balance from V6 is preserved)
         if self.onset_weighting['enabled'] and touch is not None:
             w100 = self._onset_weight_profile_100hz(touch[..., :1])  # (B, T_touch, 1)
 
-            # Spectral terms: max-pool profile to each STFT scale's frame grid
-            weighted_multiscale_losses = []
-            for scale_idx, (loss_L, p_s) in enumerate(zip(multiscale_losses, pred_stft)):
-                scale = [4096, 2048, 1024, 512, 256, 128][scale_idx]
+            lin_loss_w = 0.0
+            lg_loss_w = 0.0
+            for scale_idx, (p_s, t_s) in enumerate(zip(pred_stft, target_stft)):
+                scale = scales[scale_idx]
                 hop = int(scale * (1 - overlap))
                 w_s = self._profile_to_stft(w100, p_s.shape[2], hop)  # (B, frames, 1)
                 w_e = w_s.unsqueeze(1)  # (B, 1, frames, 1)
-                loss_weighted = (loss_L.unsqueeze(-1) * w_e).sum()
-                weight_sum = w_e.sum().clamp(min=1e-6)
-                weighted_multiscale_losses.append(loss_weighted / weight_sum)
-            multiscale_loss_weighted = sum(weighted_multiscale_losses) / len(weighted_multiscale_losses)
-            lin_loss_weighted = multiscale_loss_weighted
-            lg_loss_weighted = multiscale_loss_weighted
+                wsum = w_e.sum().clamp(min=1e-6)
+                d_lin = (p_s - t_s).abs()
+                d_lg = (safe_log(p_s + 1e-5) - safe_log(t_s + 1e-5)).abs()
+                lin_loss_w = lin_loss_w + (d_lin.unsqueeze(-1) * w_e).sum() / wsum
+                lg_loss_w = lg_loss_w + (d_lg.unsqueeze(-1) * w_e).sum() / wsum
+            lin_loss = lin_loss_w / len(scales)
+            lg_loss = lg_loss_w / len(scales)
 
-            # RMS envelope term: same profile aligned to block grid (fixes V8 crash)
+            # RMS envelope term: same profile aligned to block grid
             T_rms = pred_log_rms.shape[1]
             if w100.shape[1] >= T_rms:
                 w_r = w100[:, :T_rms, :]
@@ -561,11 +555,8 @@ class SensorDDSP(nn.Module):
             w_rms = w_r.reshape(d_rms.shape)  # match (B,T) or (B,T,1)
             rms_loss = (d_rms * w_rms).sum() / w_rms.sum().clamp(min=1e-6)
 
-            total = 100.0 * lin_loss_weighted + w * lg_loss_weighted + 1.0 * rms_loss
-        else:
-            # Original unweighted computation - keep existing behavior for backward compatibility
-            multiscale_loss = sum(L.mean() for L in multiscale_losses) / len(multiscale_losses)
-            total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
+        multiscale_loss = (lin_loss + lg_loss)
+        total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
 
         # v4: modulation-depth match on sustained-touch frames (touch_time > 2 s)
         if touch is not None and touch.shape[-1] >= 1:
@@ -606,7 +597,7 @@ class SensorDDSP(nn.Module):
 
         if return_losses:
             details = {
-                'multiscale': multiscale_loss_weighted if self.onset_weighting['enabled'] and touch is not None else multiscale_loss,
+                'multiscale': multiscale_loss,
                 'lin': lin_loss,
                 'lg': lg_loss,
                 'rms': rms_loss,
@@ -866,13 +857,16 @@ class SensorDDSP(nn.Module):
         # gamma-shaped causal kernel: rises to peak at peak_ms, then decays (matches measured
         # event-locked energy: HP log-RMS jumps +10dB at ~330ms after the 0.98 crossing)
         kern = (x / tau_f) * torch.exp(1.0 - x / tau_f)
-        kern = kern / kern.sum().clamp(min=1e-8)
+        kern = kern / kern.max().clamp(min=1e-8)  # normalize by PEAK so w reaches k at peak_ms (not sum!)
         kern = kern.flip(0)  # conv1d is cross-correlation: flip so kernel start aligns with onset
         prof = F.conv1d(onset.transpose(1, 2), kern.view(1, 1, -1), padding=klen - 1)[..., :T].transpose(1, 2)
+        # flat pre-roll box: 0.5 boost over [onset-pre_ms, onset)
         pre_frames = int(pre_ms * rate / 1000)
         pre = torch.zeros_like(onset)
         if pre_frames > 0 and pre_frames < T:
-            pre[:, :-pre_frames, :] = onset[:, pre_frames:, :] * 0.5  # boost appears pre_frames BEFORE onset
+            box = torch.ones(1, 1, pre_frames, device=onset.device)
+            c = F.conv1d(onset.transpose(1, 2), box)  # c[i] = sum onset[i..i+pre-1] (length T-pre+1)
+            pre[:, :c.shape[2], :] = (c[..., :T].transpose(1, 2) > 0).float() * 0.5
         w = 1.0 + (k - 1.0) * (prof + pre)
         return w.clamp(max=k)
 

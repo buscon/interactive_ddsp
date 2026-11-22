@@ -513,7 +513,7 @@ def main():
                 thr = float(json.load(open(_meta)).get("touch_threshold", 0.98))
             touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=thr)
             # v5: 3 touch features - log1p(t), exp(-t/0.5), clip(t,0,40)
-            touch_rolled = np.stack([np.log1p(touch_time_rolled), np.exp(-touch_time_rolled / 0.5), np.clip(touch_time_rolled, 0.0, 40.0)], axis=-1)
+            touch_rolled = np.stack([np.log1p(touch_time_rolled), (touch_time_rolled > 0) * np.exp(-touch_time_rolled / 0.5), np.clip(touch_time_rolled, 0.0, 40.0)], axis=-1)
             
             # Verify against stored touch_time
             stored_touch_time = item["touch_raw"]  # This is touch_time
