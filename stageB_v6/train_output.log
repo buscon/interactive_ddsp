@@ -1,0 +1,246 @@
+Training on cuda
+  GPU: NVIDIA GeForce RTX 5090
+ f0_base Hz: [110.0, 210.0, 100.0, 200.0, 110.0]
+
+=== Training restart #0 ===
+Loss weights: w_mod_spec=0.0, w_attack=0.0
+Model parameters: 3591308
+Dataset: /home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned_v5
+Files: 80, split=train
+Curves: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016']
+Sounds: ['01_canopy', '02_forestPad', '03_harmonicSwarm', '04_modularPercussions', '05_moss_and_mist']
+Dataset: /home/marcello/Documents/interactive_ddsp/bakeoff_data_aligned_v5
+Files: 20, split=val
+Curves: ['017', '018', '019', '020']
+Sounds: ['01_canopy', '02_forestPad', '03_harmonicSwarm', '04_modularPercussions', '05_moss_and_mist']
+
+Starting training for 2000 steps
+Train dataset: 1600 items
+Val dataset: 120 items
+Val evaluation every 250 steps
+
+Initial val_loss: 24.207694, silence_loss: 19.496724
+Steps/sec: 4.70
+step    25  train_loss 8.471901  report_loss 17.054129  lr 2.60e-04  steps/sec 4.70
+Steps/sec: 5.40
+step    50  train_loss 8.204221  report_loss 16.209072  lr 5.10e-04  steps/sec 5.40
+Steps/sec: 5.12
+step    75  train_loss 4.631905  report_loss 11.116571  lr 7.60e-04  steps/sec 5.12
+Steps/sec: 5.08
+step   100  train_loss 6.149090  report_loss 12.979633  lr 1.00e-03  steps/sec 5.08
+Steps/sec: 5.41
+step   125  train_loss 6.070851  report_loss 13.614942  lr 1.00e-03  steps/sec 5.41
+Steps/sec: 5.19
+step   150  train_loss 7.198790  report_loss 9.304181  lr 1.00e-03  steps/sec 5.19
+Steps/sec: 5.32
+step   175  train_loss 5.728650  report_loss 9.458828  lr 1.00e-03  steps/sec 5.32
+Steps/sec: 5.28
+step   200  train_loss 8.256420  report_loss 11.924635  lr 1.00e-03  steps/sec 5.28
+Steps/sec: 5.02
+step   225  train_loss 8.809318  report_loss 9.774492  lr 1.00e-03  steps/sec 5.02
+  New best val_loss: 12.555598
+Steps/sec: 5.24
+  Val by sound:
+    01_canopy: val_loss=12.528101, silence_loss=16.446157
+    02_forestPad: val_loss=11.789680, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=11.748814, silence_loss=16.556164
+    04_modularPercussions: val_loss=13.712305, silence_loss=27.373911
+    05_moss_and_mist: val_loss=12.999089, silence_loss=20.413290
+step   250  train_loss 9.393393  report_loss 8.845824  val_loss 12.555598  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.24
+Steps/sec: 5.13
+step   275  train_loss 12.388681  report_loss 13.776380  lr 1.00e-03  steps/sec 5.13
+Steps/sec: 5.13
+step   300  train_loss 9.054863  report_loss 10.017101  lr 1.00e-03  steps/sec 5.13
+Steps/sec: 4.92
+step   325  train_loss 19.753399  report_loss 15.039713  lr 1.00e-03  steps/sec 4.92
+Steps/sec: 5.02
+step   350  train_loss 9.053271  report_loss 9.308475  lr 1.00e-03  steps/sec 5.02
+Steps/sec: 5.16
+step   375  train_loss 13.875775  report_loss 10.263661  lr 1.00e-03  steps/sec 5.16
+Steps/sec: 5.17
+step   400  train_loss 21.636726  report_loss 13.241043  lr 1.00e-03  steps/sec 5.17
+Steps/sec: 5.24
+step   425  train_loss 23.795780  report_loss 12.996787  lr 1.00e-03  steps/sec 5.24
+Steps/sec: 5.00
+step   450  train_loss 19.718575  report_loss 13.371741  lr 1.00e-03  steps/sec 5.00
+Steps/sec: 5.19
+step   475  train_loss 17.019449  report_loss 11.170490  lr 1.00e-03  steps/sec 5.19
+Steps/sec: 5.07
+  Val by sound:
+    01_canopy: val_loss=12.550591, silence_loss=16.446157
+    02_forestPad: val_loss=12.747415, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=12.435764, silence_loss=16.556164
+    04_modularPercussions: val_loss=13.194881, silence_loss=27.373911
+    05_moss_and_mist: val_loss=14.145314, silence_loss=20.413290
+step   500  train_loss 18.897539  report_loss 13.168665  val_loss 13.014793  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.07
+Steps/sec: 5.26
+step   525  train_loss 12.915453  report_loss 11.369324  lr 1.00e-03  steps/sec 5.26
+Steps/sec: 5.22
+step   550  train_loss 13.949043  report_loss 10.241952  lr 1.00e-03  steps/sec 5.22
+Steps/sec: 5.30
+step   575  train_loss 14.898901  report_loss 10.797913  lr 1.00e-03  steps/sec 5.30
+Steps/sec: 5.10
+step   600  train_loss 12.101133  report_loss 10.673402  lr 1.00e-03  steps/sec 5.10
+Steps/sec: 5.34
+step   625  train_loss 19.638197  report_loss 13.216896  lr 1.00e-03  steps/sec 5.34
+Steps/sec: 5.02
+step   650  train_loss 19.927229  report_loss 11.352084  lr 1.00e-03  steps/sec 5.02
+Steps/sec: 5.38
+step   675  train_loss 15.737346  report_loss 11.576451  lr 1.00e-03  steps/sec 5.38
+Steps/sec: 5.09
+step   700  train_loss 12.301465  report_loss 8.975351  lr 1.00e-03  steps/sec 5.09
+Steps/sec: 5.05
+step   725  train_loss 12.773993  report_loss 9.762665  lr 1.00e-03  steps/sec 5.05
+Steps/sec: 5.24
+  Val by sound:
+    01_canopy: val_loss=14.311793, silence_loss=16.446157
+    02_forestPad: val_loss=13.537710, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=13.129343, silence_loss=16.556164
+    04_modularPercussions: val_loss=12.900530, silence_loss=27.373911
+    05_moss_and_mist: val_loss=14.543450, silence_loss=20.413290
+step   750  train_loss 12.959925  report_loss 9.059835  val_loss 13.684565  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.24
+Steps/sec: 5.25
+step   775  train_loss 19.256153  report_loss 11.502041  lr 1.00e-03  steps/sec 5.25
+Steps/sec: 5.20
+step   800  train_loss 16.547619  report_loss 7.022903  lr 1.00e-03  steps/sec 5.20
+Steps/sec: 5.26
+step   825  train_loss 14.243893  report_loss 9.424563  lr 1.00e-03  steps/sec 5.26
+Steps/sec: 5.34
+step   850  train_loss 17.381655  report_loss 11.701174  lr 1.00e-03  steps/sec 5.34
+Steps/sec: 5.00
+step   875  train_loss 11.273948  report_loss 8.782528  lr 1.00e-03  steps/sec 5.00
+Steps/sec: 5.11
+step   900  train_loss 10.468349  report_loss 9.086059  lr 1.00e-03  steps/sec 5.11
+Steps/sec: 5.26
+step   925  train_loss 10.217479  report_loss 7.605453  lr 1.00e-03  steps/sec 5.26
+Steps/sec: 5.15
+step   950  train_loss 13.120470  report_loss 8.766590  lr 1.00e-03  steps/sec 5.15
+Steps/sec: 5.15
+step   975  train_loss 13.728981  report_loss 9.766294  lr 1.00e-03  steps/sec 5.15
+  New best val_loss: 10.596030
+Steps/sec: 5.25
+  Val by sound:
+    01_canopy: val_loss=9.545766, silence_loss=16.446157
+    02_forestPad: val_loss=10.064393, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=10.425443, silence_loss=16.556164
+    04_modularPercussions: val_loss=11.451725, silence_loss=27.373911
+    05_moss_and_mist: val_loss=11.492825, silence_loss=20.413290
+step  1000  train_loss 12.461127  report_loss 8.972497  val_loss 10.596030  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.25
+Steps/sec: 5.11
+step  1025  train_loss 15.455983  report_loss 7.826093  lr 1.00e-03  steps/sec 5.11
+Steps/sec: 5.28
+step  1050  train_loss 11.301570  report_loss 8.399437  lr 1.00e-03  steps/sec 5.28
+Steps/sec: 5.06
+step  1075  train_loss 10.960548  report_loss 7.488208  lr 1.00e-03  steps/sec 5.06
+Steps/sec: 5.25
+step  1100  train_loss 12.327668  report_loss 7.739486  lr 1.00e-03  steps/sec 5.25
+Steps/sec: 5.39
+step  1125  train_loss 17.177446  report_loss 12.165075  lr 1.00e-03  steps/sec 5.39
+Steps/sec: 5.37
+step  1150  train_loss 12.232075  report_loss 9.317385  lr 1.00e-03  steps/sec 5.37
+Steps/sec: 5.24
+step  1175  train_loss 11.923358  report_loss 7.954004  lr 1.00e-03  steps/sec 5.24
+Steps/sec: 5.05
+step  1200  train_loss 14.626125  report_loss 9.216699  lr 1.00e-03  steps/sec 5.05
+Steps/sec: 5.27
+step  1225  train_loss 15.059449  report_loss 9.381651  lr 1.00e-03  steps/sec 5.27
+Steps/sec: 5.33
+  Val by sound:
+    01_canopy: val_loss=12.014204, silence_loss=16.446157
+    02_forestPad: val_loss=12.953631, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=11.550891, silence_loss=16.556164
+    04_modularPercussions: val_loss=13.502506, silence_loss=27.373911
+    05_moss_and_mist: val_loss=11.797094, silence_loss=20.413290
+step  1250  train_loss 11.581168  report_loss 8.350999  val_loss 12.363665  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.33
+Steps/sec: 5.19
+step  1275  train_loss 15.549524  report_loss 9.620688  lr 1.00e-03  steps/sec 5.19
+Steps/sec: 4.90
+step  1300  train_loss 19.029497  report_loss 15.019340  lr 1.00e-03  steps/sec 4.90
+Steps/sec: 5.17
+step  1325  train_loss 15.138865  report_loss 11.033766  lr 1.00e-03  steps/sec 5.17
+Steps/sec: 5.15
+step  1350  train_loss 13.613886  report_loss 12.661910  lr 1.00e-03  steps/sec 5.15
+Steps/sec: 5.07
+step  1375  train_loss 19.163107  report_loss 12.390389  lr 1.00e-03  steps/sec 5.07
+Steps/sec: 5.22
+step  1400  train_loss 14.165844  report_loss 9.422808  lr 1.00e-03  steps/sec 5.22
+Steps/sec: 5.19
+step  1425  train_loss 13.794054  report_loss 11.159453  lr 1.00e-03  steps/sec 5.19
+Steps/sec: 5.34
+step  1450  train_loss 10.322104  report_loss 7.890780  lr 1.00e-03  steps/sec 5.34
+Steps/sec: 5.04
+step  1475  train_loss 12.123363  report_loss 8.827634  lr 1.00e-03  steps/sec 5.04
+Steps/sec: 5.15
+  Val by sound:
+    01_canopy: val_loss=12.801039, silence_loss=16.446157
+    02_forestPad: val_loss=13.496566, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=13.185233, silence_loss=16.556164
+    04_modularPercussions: val_loss=12.851819, silence_loss=27.373911
+    05_moss_and_mist: val_loss=14.606606, silence_loss=20.413290
+step  1500  train_loss 14.252827  report_loss 8.210536  val_loss 13.388252  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.15
+Steps/sec: 5.21
+step  1525  train_loss 12.733508  report_loss 7.846394  lr 1.00e-03  steps/sec 5.21
+Steps/sec: 5.36
+step  1550  train_loss 15.222838  report_loss 9.963655  lr 1.00e-03  steps/sec 5.36
+Steps/sec: 5.28
+step  1575  train_loss 11.267093  report_loss 8.500073  lr 1.00e-03  steps/sec 5.28
+Steps/sec: 5.22
+step  1600  train_loss 10.827511  report_loss 7.061315  lr 1.00e-03  steps/sec 5.22
+Steps/sec: 5.36
+step  1625  train_loss 14.540292  report_loss 8.329559  lr 1.00e-03  steps/sec 5.36
+Steps/sec: 5.05
+step  1650  train_loss 13.394327  report_loss 7.603868  lr 1.00e-03  steps/sec 5.05
+Steps/sec: 5.14
+step  1675  train_loss 11.312470  report_loss 6.897826  lr 1.00e-03  steps/sec 5.14
+Steps/sec: 5.27
+step  1700  train_loss 8.678179  report_loss 10.006633  lr 1.00e-03  steps/sec 5.27
+Steps/sec: 4.98
+step  1725  train_loss 12.059796  report_loss 7.690257  lr 1.00e-03  steps/sec 4.98
+Steps/sec: 5.05
+  Val by sound:
+    01_canopy: val_loss=11.336588, silence_loss=16.446157
+    02_forestPad: val_loss=11.776866, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=11.424705, silence_loss=16.556164
+    04_modularPercussions: val_loss=11.638701, silence_loss=27.373911
+    05_moss_and_mist: val_loss=12.780431, silence_loss=20.413290
+step  1750  train_loss 15.249368  report_loss 9.994632  val_loss 11.791458  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.05
+Steps/sec: 5.02
+step  1775  train_loss 12.133282  report_loss 9.515824  lr 1.00e-03  steps/sec 5.02
+Steps/sec: 5.27
+step  1800  train_loss 10.821181  report_loss 8.322982  lr 1.00e-03  steps/sec 5.27
+Steps/sec: 5.26
+step  1825  train_loss 12.291871  report_loss 7.164027  lr 1.00e-03  steps/sec 5.26
+Steps/sec: 5.06
+step  1850  train_loss 10.773664  report_loss 8.630605  lr 1.00e-03  steps/sec 5.06
+Steps/sec: 5.25
+step  1875  train_loss 12.097395  report_loss 9.394955  lr 1.00e-03  steps/sec 5.25
+Steps/sec: 5.26
+step  1900  train_loss 10.652397  report_loss 7.315409  lr 1.00e-03  steps/sec 5.26
+Steps/sec: 5.15
+step  1925  train_loss 12.149328  report_loss 7.403073  lr 1.00e-03  steps/sec 5.15
+Steps/sec: 5.18
+step  1950  train_loss 11.767946  report_loss 7.718798  lr 1.00e-03  steps/sec 5.18
+Steps/sec: 5.30
+step  1975  train_loss 9.021351  report_loss 9.484989  lr 1.00e-03  steps/sec 5.30
+Steps/sec: 5.58
+  Val by sound:
+    01_canopy: val_loss=11.800276, silence_loss=16.446157
+    02_forestPad: val_loss=12.533632, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=12.374727, silence_loss=16.556164
+    04_modularPercussions: val_loss=11.613298, silence_loss=27.373911
+    05_moss_and_mist: val_loss=13.958496, silence_loss=20.413290
+step  1999  train_loss 11.739220  report_loss 7.392941  val_loss 12.456086  silence_loss 19.496724  lr 1.00e-03  steps/sec 5.58
+  Val by sound:
+    01_canopy: val_loss=11.803282, silence_loss=16.446157
+    02_forestPad: val_loss=12.537358, silence_loss=16.694096
+    03_harmonicSwarm: val_loss=12.375711, silence_loss=16.556164
+    04_modularPercussions: val_loss=11.614049, silence_loss=27.373911
+    05_moss_and_mist: val_loss=13.960782, silence_loss=20.413290
+
+Training complete!
+  Final train loss: 11.739220
+  Final report loss: 7.392941
+  Final val loss: 12.456319
+  Final silence loss: 19.496724
+  Best val loss: 10.596030
+  Run directory: runs/bakeoff_ddsp_poc/stageB_v6
