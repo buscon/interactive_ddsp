@@ -282,12 +282,16 @@ def main():
             print(f"\nLoading checkpoint for fine-tuning: {args.init_checkpoint}")
             checkpoint = torch.load(args.init_checkpoint, map_location=device)
             
-            # Load model state
-            model.load_state_dict(checkpoint['model'])
-            print(f"  Loaded model state from step {checkpoint.get('step', 'unknown')}")
+            # Handle both raw state_dict (e.g. V6 state_final.pth) and wrapped {'model': ..., 'step': N}
+            if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                state_dict = checkpoint['model']
+                start_step = checkpoint.get('step', 0)
+            else:
+                state_dict = checkpoint
+                start_step = 0
             
-            # Set start step for logging (for resuming training progress)
-            start_step = checkpoint.get('step', 0)
+            model.load_state_dict(state_dict)
+            print(f"  Loaded model state ({len(state_dict)} keys), start_step={start_step}")
             print(f"  Fine-tuning from step {start_step}")
         else:
             start_step = 0
