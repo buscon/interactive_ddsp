@@ -21,3 +21,4 @@ __pycache__/
 *.pth
 !docs/**
 bakeoff_data_aligned_v8/
+bakeoff_notes_v8c.json
