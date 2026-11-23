@@ -17,9 +17,9 @@ from scipy.stats import pearsonr
 from torch.utils.tensorboard import SummaryWriter
 
 # Add the project to path for imports
-sys.path.insert(0, "/home/marcello/Documents/interactive_ddsp")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from engine_ddsp.sensor_data import AlignedChunkDataset
+from engine_ddsp.sensor_data_v5 import AlignedChunkDatasetV5 as AlignedChunkDataset
 from engine_ddsp.sensor_ddsp import SensorDDSP
 from engine_ddsp.synth import multiscale_fft, safe_log
 
@@ -315,7 +315,7 @@ def main():
             # Convert to tensor
             audio_t = torch.from_numpy(audio).unsqueeze(0).to(device)
             sensor_t = torch.from_numpy(sensor).unsqueeze(0).unsqueeze(-1).to(device)
-            touch_t = torch.from_numpy(touch).unsqueeze(0).unsqueeze(-1).to(device)
+            touch_t = torch.from_numpy(touch).unsqueeze(0).to(device)  # (1, T, 3) dataset features
             sound_id_t = torch.tensor([sound_id], dtype=torch.long, device=device)
             
             # Run model in eval mode
@@ -341,7 +341,7 @@ def main():
                         
                         # Extract chunk
                         sensor_chunk = torch.from_numpy(sensor[start//480:end//480]).unsqueeze(0).unsqueeze(-1).to(device)
-                        touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).unsqueeze(-1).to(device)
+                        touch_chunk = torch.from_numpy(touch[start//480:end//480]).unsqueeze(0).to(device)
                         audio_target_chunk = audio[start:end]
                         
                         with torch.no_grad():
@@ -463,7 +463,8 @@ def main():
                 print(f"    Touch_time recomputation verified (max diff={diff:.6f})")
             
             # Also verify touch
-            stored_touch = item["touch"]
+            # touch_rolled is the legacy 1-channel input (touch_time/30, clipped); compare like with like
+            stored_touch = np.clip(item["touch_raw"] / 30.0, 0.0, 2.0)
             touch_diff = np.abs(touch_rolled - stored_touch).max()
             if touch_diff > 0.001:
                 print(f"    WARNING: Touch recomputation diff={touch_diff:.6f} from stored")
