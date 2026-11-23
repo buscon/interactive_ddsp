@@ -304,10 +304,10 @@ class SensorDDSP(nn.Module):
         fh = self.fast_head(fast)
         harmonic_param = harmonic_param + fh[..., :self.harmonic_head.out_features]
         noise_param = noise_param + fh[..., self.harmonic_head.out_features:]
-        f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch, note], dim=-1))  # (B, T, 1)
-        f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)  # keep tanh out of saturation
-        # Clamp pre-activation to [-3, 3] for un-saturated tanh
-        f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)
+        # FIX: Freeze f0_head at zero — f0 = note_f0 exactly (no deviation)
+        # Previous f0_head was learning wrong mapping (raw Hz input → large negative output)
+        # Can re-enable with normalized input (log2 ratio) and f0 loss in future
+        f0_deviation = torch.zeros_like(note)  # (B, T, 1) — tanh(0)=0, f0 = note_f0 × 2^0 = note_f0
         
         # Compute f0 per frame
         # f0 = f0_base[sound_id] * 2^(max_f0_octaves * tanh(f0_deviation))
