@@ -161,7 +161,7 @@ class SensorDDSP(nn.Module):
         # Heads
         self.harmonic_head = nn.Linear(hidden_size, n_harmonic + 1)
         self.noise_head = nn.Linear(hidden_size, n_bands)
-        self.f0_head = nn.Linear(hidden_size + 1 + 3, 1)  # +1 touch_onset, +3 touch features
+        self.f0_head = nn.Linear(hidden_size + 1 + 3 + 1, 1)  # +1 touch_onset, +3 touch, +1 note
         # V8b: fast-decay touch features -> direct additive contribution to amp heads.
         # Zero-init so a V6 checkpoint (without fast_head keys) behaves identically at start.
         self.fast_head = nn.Linear(3, (n_harmonic + 1) + n_bands)
@@ -304,7 +304,7 @@ class SensorDDSP(nn.Module):
         fh = self.fast_head(fast)
         harmonic_param = harmonic_param + fh[..., :self.harmonic_head.out_features]
         noise_param = noise_param + fh[..., self.harmonic_head.out_features:]
-        f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch], dim=-1))  # (B, T, 1)
+        f0_deviation = self.f0_head(torch.cat([mlp_out, touch_onset, touch, note], dim=-1))  # (B, T, 1)
         f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)  # keep tanh out of saturation
         # Clamp pre-activation to [-3, 3] for un-saturated tanh
         f0_deviation = torch.clamp(f0_deviation, -3.0, 3.0)
