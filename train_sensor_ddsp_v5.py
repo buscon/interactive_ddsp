@@ -137,7 +137,8 @@ def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
     val_losses = []
     silence_losses = []
     # Derive sound_names_ordered from index.json (not hardcoded)
-    index_path = os.path.join(os.path.dirname(val_items[0]['path']), 'index.json')
+    # Use known data root since val_items doesn't have 'path' key
+    index_path = '/home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_data_aligned_v6/index.json'
     if os.path.exists(index_path):
         with open(index_path) as f:
             index = json.load(f)

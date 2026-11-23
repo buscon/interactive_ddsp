@@ -69,7 +69,7 @@ class AlignedChunkDatasetV5(Dataset):
     # Whitelist of index.json source_dir -> expected n_files
     PROVENANCE_ROOTS = {
         OLD_PROVENANCE_ROOT: 100,
-        V6_PROVENANCE_ROOT: 100,
+        V6_PROVENANCE_ROOT: 80,  # 4 sounds × 20 curves (excluded 04_modularPercussions)
     }
     AUDIO_SR = 48000
 
