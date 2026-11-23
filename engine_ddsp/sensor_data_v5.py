@@ -1,6 +1,15 @@
 """
 SensorDDSP dataset and f0 estimation utilities for v5.
-Loads aligned proximity sensor + audio data from bakeoff_data_aligned_v5.
+Loads aligned proximity sensor + audio data from bakeoff_data_aligned_v5 (old
+provenance) or bakeoff_data_aligned_v6 (v6 provenance).
+
+v6 audio offset: in v6 npz files the audio lags the sensor clock by offset_s
+(0.236-0.400 s, recording artifact). With align_audio=True (default) and an npz
+that carries offset_s, audio is shifted to realign it with the sensor clock:
+aligned_audio[n] = audio[n + round(offset_s * 48000)]. The sample tail that no
+longer has a matching frame is trimmed (no zero padding). Sensor, touch_time and
+note labels stay on the 100 Hz sensor clock and are only trimmed to T_eff =
+floor((n_samples - shift) / 480).
 """
 import json
 import os
@@ -51,14 +60,21 @@ class AlignedChunkDatasetV5(Dataset):
     - Onset labels are loaded from bakeoff_notes_v5.json or custom notes_json path
     """
     
-    PROVENANCE_ROOT = "/home/marcello/sentire/Recordings/Dataset_20261121_134808"
-    PROVENANCE_N_FILES = 100
-    
+    OLD_PROVENANCE_ROOT = "/home/marcello/sentire/Recordings/Dataset_20261121_134808"
+    V6_PROVENANCE_ROOT = "/home/marcello/sentire/Recordings/Dataset_v6_20261122"
+    # Whitelist of index.json source_dir -> expected n_files
+    PROVENANCE_ROOTS = {
+        OLD_PROVENANCE_ROOT: 100,
+        V6_PROVENANCE_ROOT: 100,
+    }
+    AUDIO_SR = 48000
+
     def __init__(self, root, split, chunk_s=10.0, sounds=None, curves=None,
-                 epoch_len=None, seed=0, train=True, notes_json=None):
+                 epoch_len=None, seed=0, train=True, notes_json=None,
+                 align_audio=True):
         """
         Args:
-            root: path to bakeoff_data_aligned_v5
+            root: path to bakeoff_data_aligned_v5 or bakeoff_data_aligned_v6
             split: "train" or "val"
             chunk_s: chunk duration in seconds (default 10.0)
             sounds: list of sound names to include, or None for all
@@ -67,6 +83,9 @@ class AlignedChunkDatasetV5(Dataset):
             seed: random seed for shuffling
             train: True for random chunks, False for deterministic non-overlapping
             notes_json: path to notes JSON file (default: bakeoff_notes_v5.json)
+            align_audio: if True and the npz has offset_s, shift audio by
+                offset_s to align it with the sensor clock and trim the tail
+                (see module docstring). Ignored for npz without offset_s.
         """
         # Set notes path if provided
         if notes_json is not None:
@@ -76,23 +95,28 @@ class AlignedChunkDatasetV5(Dataset):
         self.split = split
         self.chunk_s = chunk_s
         self.train = train
-        
+        self.align_audio = align_audio
+
         # Load index
         index_path = os.path.join(root, "index.json")
         with open(index_path) as f:
             self.index = json.load(f)
-        
-        # Provenance guard
-        if self.index["source_dir"] != self.PROVENANCE_ROOT:
+
+        # Provenance guard (whitelist of source dirs)
+        source_dir = self.index["source_dir"]
+        if source_dir not in self.PROVENANCE_ROOTS:
             raise ValueError(
-                f"Provenance mismatch: expected {self.PROVENANCE_ROOT}, "
-                f"got {self.index['source_dir']}"
+                f"Provenance mismatch: expected one of {sorted(self.PROVENANCE_ROOTS)}, "
+                f"got {source_dir}"
             )
-        if self.index["n_files"] != self.PROVENANCE_N_FILES:
+        expected_n = self.PROVENANCE_ROOTS[source_dir]
+        if self.index["n_files"] != expected_n:
             raise ValueError(
-                f"Provenance mismatch: expected {self.PROVENANCE_N_FILES} files, "
+                f"Provenance mismatch: expected {expected_n} files, "
                 f"got {self.index['n_files']}"
             )
+        # v6 datasets must carry offset_s in every npz (checked at load time)
+        self.is_v6 = source_dir == self.V6_PROVENANCE_ROOT
         
         # Filter files by split
         self.files = [f for f in self.index["files"] if f["split"] == split]
@@ -121,7 +145,8 @@ class AlignedChunkDatasetV5(Dataset):
                 self.epoch_len = len(self.files) * 20
             else:
                 # Deterministic: cover each file with non-overlapping chunks
-                self.epoch_len = sum(self._count_chunks(f) for f in self.files)
+                # (uses the loaded, possibly trimmed T_eff, not index.json T)
+                self.epoch_len = sum(self._count_chunks(f) for f in self.loaded)
         else:
             self.epoch_len = epoch_len
         
@@ -141,10 +166,32 @@ class AlignedChunkDatasetV5(Dataset):
         for f in self.files:
             path = f["path"]
             data = np.load(path)
-            # audio: int16 -> float32 normalized
-            audio = data["audio"].astype(np.float32) / 32768.0
+            has_offset = "offset_s" in data.files
+            if self.is_v6 and not has_offset:
+                raise ValueError(
+                    f"v6 dataset npz missing offset_s: {path}"
+                )
+            audio_raw = data["audio"]
             sensor = data["sensor"].astype(np.float32)
             touch_time = data["touch_time"].astype(np.float32)
+            T = int(f["T"])
+            if self.align_audio and has_offset:
+                # Audio lags the sensor clock by offset_s: drop the first
+                # `shift` samples, then trim to whole sensor frames (no padding).
+                n_samples_raw = int(audio_raw.shape[0])
+                shift = int(round(float(data["offset_s"]) * self.AUDIO_SR))
+                T_eff = (n_samples_raw - shift) // 480
+                if T_eff > len(sensor) or T_eff > len(touch_time):
+                    raise ValueError(
+                        f"Sensor shorter than aligned audio: {path} "
+                        f"(T_eff={T_eff}, sensor={len(sensor)}, touch={len(touch_time)})"
+                    )
+                audio_raw = audio_raw[shift:shift + T_eff * 480]
+                sensor = sensor[:T_eff]
+                touch_time = touch_time[:T_eff]
+                T = T_eff
+            # audio: int16 -> float32 normalized
+            audio = audio_raw.astype(np.float32) / 32768.0
             sound_id = self.sound_id_map[f["sound"]]
             self.loaded.append({
                 "audio": audio,
@@ -154,11 +201,12 @@ class AlignedChunkDatasetV5(Dataset):
                 "sound": f["sound"],
                 "curve": f["curve"],
                 "n_samples": int(f["n_samples"]),
-                "T": int(f["T"]),
+                "T": T,
             })
-    
+
     def _count_chunks(self, file_entry):
-        """Count how many non-overlapping chunks fit in a file."""
+        """Count how many non-overlapping chunks fit in a file.
+        file_entry: a self.loaded dict (uses its effective T)."""
         T = file_entry["T"]
         if T < self.chunk_frames:
             return 0
@@ -188,10 +236,11 @@ class AlignedChunkDatasetV5(Dataset):
             # Deterministic: iterate over files and chunks
             cum = 0
             file_idx = 0
-            for f in self.loaded:
+            # enumerate, not list.index: index() compares dicts holding numpy arrays
+            for fi, f in enumerate(self.loaded):
                 n_chunks = self._count_chunks(f)
                 if cum + n_chunks > idx:
-                    file_idx = self.loaded.index(f)
+                    file_idx = fi
                     chunk_idx = idx - cum
                     max_offset = f["T"] - self.chunk_frames
                     offset = chunk_idx * self.chunk_frames
@@ -255,7 +304,7 @@ class AlignedChunkDatasetV5(Dataset):
             "curve": file_data["curve"],
             "offset": offset,
         }
-    
+
     def full(self, sound, curve):
         """
         Get the full file for sound+curve (for rendering).
@@ -294,3 +343,7 @@ class AlignedChunkDatasetV5(Dataset):
                     "offset": 0,
                 }
         raise ValueError(f"File not found: sound={sound}, curve={curve}")
+
+
+# Public alias (train_sensor_ddsp_v5.py imports it under this name).
+AlignedChunkDataset = AlignedChunkDatasetV5
