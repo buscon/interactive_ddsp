@@ -208,7 +208,7 @@ def main():
     random.seed(args.seed)
 
     # Build f0_base list in order of sound_ids from index.json (v5 dataset)
-    with open("bakeoff_data_aligned_v5/index.json") as f:
+    with open(os.path.join(config["data"]["root"], "index.json")) as f:
         index = json.load(f)
     
     # v5: no f0_base.json, use override from config
@@ -296,6 +296,14 @@ def main():
         else:
             start_step = 0
 
+        # Re-apply config attack lag after any checkpoint load (load_state_dict overwrites the buffer)
+        if "attack_lag_s" in config["model"]:
+            model.set_attack_lag(config["model"]["attack_lag_s"])
+            _lag = model.attack_lag_s.detach().cpu().tolist()
+            print(f"attack_lag_s buffer: {_lag}")
+            assert np.allclose(_lag, config["model"]["attack_lag_s"], atol=1e-6), \
+                f"attack_lag_s mismatch: buffer={_lag} config={config['model']['attack_lag_s']}"
+
         # Fine-tuning: determine effective steps
         is_finetune = args.init_checkpoint is not None
         if is_finetune:
@@ -318,16 +326,18 @@ def main():
             sounds=config["data"]["train_sounds"],
             curves=config["data"]["train_curves"],
             epoch_len=None, seed=args.seed + restart_num, train=True,
-            notes_json=config["data"].get("notes_json", None)
+            notes_json=config["data"].get("notes_json", None),
+            align_audio=config["data"].get("align_audio", False)
         )
-        
+
         # Validation dataset
         val_dataset = AlignedChunkDataset(
             root, split="val", chunk_s=chunk_s,
             sounds=config["data"]["val_sounds"],
             curves=config["data"]["val_curves"],
             epoch_len=None, seed=args.seed + restart_num, train=False,
-            notes_json=config["data"].get("notes_json", None)
+            notes_json=config["data"].get("notes_json", None),
+            align_audio=config["data"].get("align_audio", False)
         )
 
         # Overfit mode: use one fixed file
@@ -383,11 +393,10 @@ def main():
         
         # Prepare val data for evaluation - collect all items
         val_items = []
-        sound_curve_pairs = []
-        for sound in ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]:
-            for curve in ["017", "018", "019", "020"]:
-                sound_curve_pairs.append((sound, curve))
-        
+        # (sound, curve) pairs come from the val split itself (v5/v8: 017-020 x 5 sounds; v6: 004/011/017 x 5)
+        sound_curve_pairs = sorted({(f["sound"], f["curve"]) for f in val_dataset.files})
+        print(f"Val items: {len(sound_curve_pairs)} (sound, curve) pairs: {sound_curve_pairs}")
+
         for sound, curve in sound_curve_pairs:
             item = val_dataset.full(sound, curve)
             val_items.append(item)

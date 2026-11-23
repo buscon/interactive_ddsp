@@ -259,8 +259,8 @@ def main():
     p.add_argument("--ckpt", default="state_final.pth", help="Checkpoint file")
     p.add_argument("--out", required=True, help="Output renders directory")
     p.add_argument("--sounds", nargs="+", default=None, help="Sound names to render (default: all)")
-    p.add_argument("--curves", nargs="+", default=["017", "018", "019", "020"], help="Curve IDs to render")
-    p.add_argument("--split", default="val", choices=["train", "val"], help="Dataset split (train or val)")
+    p.add_argument("--curves", nargs="+", default=None, help="Curve IDs to render (default: all curves of the split in index.json)")
+    p.add_argument("--split", default="val", choices=["train", "val", "test"], help="Dataset split (train, val or test)")
     args = p.parse_args()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -294,6 +294,13 @@ def main():
     ckpt_path = os.path.join(args.run, args.ckpt)
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
     print(f"Loaded checkpoint: {ckpt_path}")
+    # Re-apply config attack lag after checkpoint load (load_state_dict overwrites the buffer)
+    if "attack_lag_s" in run_config["model"]:
+        model.set_attack_lag(run_config["model"]["attack_lag_s"])
+        _lag = model.attack_lag_s.detach().cpu().tolist()
+        print(f"attack_lag_s buffer: {_lag}")
+        assert np.allclose(_lag, run_config["model"]["attack_lag_s"], atol=1e-6), \
+            f"attack_lag_s mismatch: buffer={_lag} config={run_config['model']['attack_lag_s']}"
     
     # Create output directory
     os.makedirs(args.out, exist_ok=True)
@@ -306,11 +313,9 @@ def main():
     # Determine sounds to render
     if args.sounds:
         sounds = args.sounds
-        curves = args.curves
     else:
         sounds = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
-        curves = args.curves
-    
+
     # Process each sound/curve combination
     all_metrics = []
     metrics_by_sound = {s: [] for s in sounds}
@@ -325,9 +330,17 @@ def main():
     root = run_config["data"]["root"]
     full_dataset = AlignedChunkDataset(
         root, split=args.split, chunk_s=chunk_s,
-        epoch_len=None, seed=0, train=False  # train=False for deterministic
+        epoch_len=None, seed=0, train=False,  # train=False for deterministic
+        notes_json=run_config["data"].get("notes_json", None),
+        align_audio=run_config["data"].get("align_audio", False),
     )
-    
+    # Curves: CLI override, else every curve of the requested split in the dataset index
+    if args.curves is not None:
+        curves = args.curves
+    else:
+        curves = sorted({f["curve"] for f in full_dataset.files})
+    print(f"Curves to render ({args.split}): {curves}")
+
     for sound in sounds:
         for curve in curves:
             print(f"\n  {sound}_{curve}...")
