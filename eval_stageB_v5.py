@@ -232,6 +232,123 @@ def compute_sustained_touch_corr(pred, target, touch_time, sr=48000):
         return None
     return float(_pr(ep[m], et[m])[0])
 
+def compute_attack_metrics(pred, target, touch_raw, sr=48000, hop=96, win=240):
+    """
+    Event-locked short-attack metrics matching opus_rca/common.py.
+    - env(x): 10 * np.log10(mean_sq_over_win + 1e-12) at 2 ms hop (hop=96, win=240).
+    - onsets: np.where((tt[1:] > 0) & (tt[:-1] == 0))[0] + 1.
+    - For each onset o where f0 = round(o * 0.01 * sr / hop) satisfies f0 >= 55 and f0 + 160 <= len(et):
+        pre = median(e[f0-50:f0-5])
+        seg = e[f0:f0+150]
+        pk = seg.max()
+        tpk = seg.argmax() * 2.0  (ms)
+        p300 = median(e[f0+140:f0+160])
+        bump = pk - p300
+    - Returns per-file medians: dpk_db, dtpk_ms, abs_dtpk_ms, p_bump_db, t_bump_db, dpre_db, dp300_db, n_onsets
+    """
+    def _env(x):
+        x = np.asarray(x, dtype=np.float64)
+        n_frames = (len(x) - win) // hop + 1
+        if n_frames <= 0:
+            return np.zeros(0, dtype=np.float64)
+        x2 = x ** 2
+        frames = np.lib.stride_tricks.sliding_window_view(x2, win)[::hop]
+        mean_sq = frames.mean(axis=-1)
+        return 10.0 * np.log10(mean_sq + 1e-12)
+
+    min_len = min(len(pred), len(target))
+    ep = _env(pred[:min_len])
+    et = _env(target[:min_len])
+    min_env_len = min(len(ep), len(et))
+    ep = ep[:min_env_len]
+    et = et[:min_env_len]
+
+    tt = np.asarray(touch_raw)
+    onsets = np.where((tt[1:] > 0) & (tt[:-1] == 0))[0] + 1
+
+    dpk_list = []
+    dtpk_list = []
+    abs_dtpk_list = []
+    p_bump_list = []
+    t_bump_list = []
+    dpre_list = []
+    dp300_list = []
+    onset_records = []
+
+    for o in onsets:
+        f0 = int(round(o * 0.01 * sr / hop))
+        if f0 >= 55 and f0 + 160 <= min_env_len:
+            pre_p = float(np.median(ep[f0 - 50 : f0 - 5]))
+            seg_p = ep[f0 : f0 + 150]
+            pk_p = float(seg_p.max())
+            tpk_p = float(seg_p.argmax() * 2.0)
+            p300_p = float(np.median(ep[f0 + 140 : f0 + 160]))
+            bump_p = pk_p - p300_p
+
+            pre_t = float(np.median(et[f0 - 50 : f0 - 5]))
+            seg_t = et[f0 : f0 + 150]
+            pk_t = float(seg_t.max())
+            tpk_t = float(seg_t.argmax() * 2.0)
+            p300_t = float(np.median(et[f0 + 140 : f0 + 160]))
+            bump_t = pk_t - p300_t
+
+            dpk = pk_p - pk_t
+            dtpk = tpk_p - tpk_t
+            abs_dtpk = abs(dtpk)
+            dpre = pre_p - pre_t
+            dp300 = p300_p - p300_t
+
+            dpk_list.append(dpk)
+            dtpk_list.append(dtpk)
+            abs_dtpk_list.append(abs_dtpk)
+            p_bump_list.append(bump_p)
+            t_bump_list.append(bump_t)
+            dpre_list.append(dpre)
+            dp300_list.append(dp300)
+
+            onset_records.append({
+                "onset_frame": int(o),
+                "f0": int(f0),
+                "dpk_db": dpk,
+                "dtpk_ms": dtpk,
+                "abs_dtpk_ms": abs_dtpk,
+                "p_bump_db": bump_p,
+                "t_bump_db": bump_t,
+                "dpre_db": dpre,
+                "dp300_db": dp300,
+                "pk_p": pk_p,
+                "pk_t": pk_t,
+                "tpk_p": tpk_p,
+                "tpk_t": tpk_t,
+            })
+
+    n_onsets = len(dpk_list)
+    if n_onsets > 0:
+        return {
+            "dpk_db": float(np.median(dpk_list)),
+            "dtpk_ms": float(np.median(dtpk_list)),
+            "abs_dtpk_ms": float(np.median(abs_dtpk_list)),
+            "p_bump_db": float(np.median(p_bump_list)),
+            "t_bump_db": float(np.median(t_bump_list)),
+            "dpre_db": float(np.median(dpre_list)),
+            "dp300_db": float(np.median(dp300_list)),
+            "n_onsets": n_onsets,
+            "onsets": onset_records,
+        }
+    else:
+        return {
+            "dpk_db": float("nan"),
+            "dtpk_ms": float("nan"),
+            "abs_dtpk_ms": float("nan"),
+            "p_bump_db": float("nan"),
+            "t_bump_db": float("nan"),
+            "dpre_db": float("nan"),
+            "dp300_db": float("nan"),
+            "n_onsets": 0,
+            "onsets": [],
+        }
+
+
 def compute_metrics_with_same_len(pred, target, scales, overlap, device='cpu'):
     """Compute metrics ensuring pred and target have same length."""
     # Pad or truncate to same length
@@ -261,6 +378,7 @@ def main():
     p.add_argument("--sounds", nargs="+", default=None, help="Sound names to render (default: all)")
     p.add_argument("--curves", nargs="+", default=None, help="Curve IDs to render (default: all curves of the split in index.json)")
     p.add_argument("--split", default="val", choices=["train", "val", "test"], help="Dataset split (train, val or test)")
+    p.add_argument("--use_npz_note_hz", action="store_true", help="Use note_hz from npz")
     args = p.parse_args()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -281,12 +399,33 @@ def main():
         f0_base = [110.0, 210.0, 100.0, 200.0, 110.0]
     
     # Create model - remove config-only params (registered as buffers or set separately)
+    import inspect
+    sig = inspect.signature(SensorDDSP.__init__).parameters
     model_config = run_config["model"].copy()
     model_config.pop("lfo_rate_base", None)
     model_config.pop("lfo_depth_mul_base", None)
     model_config.pop("lfo_depth_add_base", None)
     model_config.pop("f0_base_hz_override", None)
     model_config["f0_base_hz"] = f0_base
+
+    # Safely extract optional model kwargs from run_config["model"] / run_config.get("loss_weights", {})
+    loss_weights = run_config.get("loss_weights", {})
+    for kw in ["w_lin", "w_rms", "onset_rms_factor", "touch_amp_head"]:
+        val = None
+        if kw in run_config["model"]:
+            val = run_config["model"][kw]
+        elif kw in loss_weights:
+            val = loss_weights[kw]
+        if val is not None and kw in sig:
+            model_config[kw] = val
+
+    # Filter model_config against signature so unknown keys do not cause TypeError
+    has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.values())
+    if not has_var_kw:
+        for k in list(model_config.keys()):
+            if k not in sig:
+                model_config.pop(k, None)
+
     model = SensorDDSP(**model_config).to(device)
     model.eval()
     
@@ -326,11 +465,13 @@ def main():
     
     # Dataset for loading full files
     root = run_config["data"]["root"]
+    use_npz_note_hz = args.use_npz_note_hz or run_config["data"].get("use_npz_note_hz", False)
     full_dataset = AlignedChunkDataset(
         root, split=args.split, chunk_s=chunk_s,
         epoch_len=None, seed=0, train=False,  # train=False for deterministic
         notes_json=run_config["data"].get("notes_json", None),
         align_audio=run_config["data"].get("align_audio", False),
+        use_npz_note_hz=use_npz_note_hz,
     )
     # Curves: CLI override, else every curve of the requested split in the dataset index
     if args.curves is not None:
@@ -475,6 +616,9 @@ def main():
             target_rms_val = np.sqrt(np.mean(audio**2))
             rms_ratio = pred_rms_val / (target_rms_val + 1e-8)
             
+            # Silence loss
+            silence_loss = compute_multiscale_loss(np.zeros_like(audio), audio, scales, overlap, device)
+
             touch_time_raw = item["touch_raw"] if "touch_raw" in item else np.expm1(touch[..., 0])  # raw seconds
             onset_f0_err = compute_touch_onset_f0_error(pred, audio, touch_time_raw)
             sustained_corr = compute_sustained_touch_corr(pred, audio, touch_time_raw)
@@ -483,10 +627,15 @@ def main():
             hf_ratio_tgt = compute_hf_ratio(audio)
             mod_depth_pred = compute_mod_depth(pred, touch_time_raw)
             mod_depth_tgt = compute_mod_depth(audio, touch_time_raw)
+
+            # Attack metrics (event-locked short-attack metrics)
+            attack_res = compute_attack_metrics(pred, audio, touch_time_raw)
+
             metrics = {
                 "sound": sound,
                 "curve": curve,
                 "multiscale_loss": multiscale_loss,
+                "silence_loss": silence_loss,
                 "rms_envelope_corr": rms_corr if not np.isnan(rms_corr) else 0,
                 "centroid_corr": centroid_corr if not np.isnan(centroid_corr) else 0,
                 "rms_ratio": rms_ratio,
@@ -496,11 +645,21 @@ def main():
                 "hf_ratio_tgt": hf_ratio_tgt,
                 "mod_depth_pred": mod_depth_pred,
                 "mod_depth_tgt": mod_depth_tgt,
+                "dpk_db": attack_res["dpk_db"],
+                "dtpk_ms": attack_res["dtpk_ms"],
+                "abs_dtpk_ms": attack_res["abs_dtpk_ms"],
+                "p_bump_db": attack_res["p_bump_db"],
+                "t_bump_db": attack_res["t_bump_db"],
+                "dpre_db": attack_res["dpre_db"],
+                "dp300_db": attack_res["dp300_db"],
+                "n_onsets": attack_res["n_onsets"],
             }
             all_metrics.append(metrics)
             metrics_by_sound[sound].append(metrics)
             
-            print(f"    Metrics: MS loss={multiscale_loss:.4f}, RMS corr={rms_corr:.4f}, Centroid corr={centroid_corr:.4f}, RMS ratio={rms_ratio:.4f}")
+            print(f"    Metrics: MS loss={multiscale_loss:.4f} (silence={silence_loss:.4f}, ratio={multiscale_loss/(silence_loss+1e-8):.4f}), RMS corr={rms_corr:.4f}, Centroid corr={centroid_corr:.4f}, RMS ratio={rms_ratio:.4f}")
+            if attack_res["n_onsets"] > 0:
+                print(f"      Attack (N={attack_res['n_onsets']}): dpk={attack_res['dpk_db']:.2f}dB, dtpk={attack_res['dtpk_ms']:.1f}ms, |dtpk|={attack_res['abs_dtpk_ms']:.1f}ms, bump={attack_res['p_bump_db']:.2f}dB (tgt {attack_res['t_bump_db']:.2f}dB)")
             
             # (e) Sensor ablation
             print(f"    Sensor ablation...")
@@ -517,31 +676,33 @@ def main():
             
             # (ii) sensor circularly rolled, touch recomputed with dataset rule
             # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
-            sensor_rolled = np.roll(sensor, 2000)  # shared protocol: roll 2000 frames (20 s), per curve-018 diagnostic
-                        # V8b: read touch threshold from dataset metadata (train/eval consistency)
+            # V8b: read touch threshold from dataset metadata (train/eval consistency)
             thr = 0.98
             _meta = os.path.join(run_config["data"]["root"], "metadata.json")
             if os.path.exists(_meta):
                 thr = float(json.load(open(_meta)).get("touch_threshold", 0.98))
-            touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=thr)
-            # v5: 3 touch features - log1p(t), exp(-t/0.5), clip(t,0,40)
-            touch_rolled = np.stack([np.log1p(touch_time_rolled), (touch_time_rolled > 0) * np.exp(-touch_time_rolled / 0.5), np.clip(touch_time_rolled, 0.0, 40.0)], axis=-1)
-            
-            # Verify against stored touch_time
+
+            # Verify touch recomputation rule against UNROLLED stored touch_time
+            touch_time_unrolled = compute_touch_from_sensor(sensor, threshold=thr)
             stored_touch_time = item["touch_raw"]  # This is touch_time
-            diff = np.abs(touch_time_rolled - stored_touch_time).max()
+            diff = np.abs(touch_time_unrolled - stored_touch_time).max()
             if diff > 0.001:
                 print(f"    WARNING: Touch_time recomputation diff={diff:.6f} from stored")
             else:
                 print(f"    Touch_time recomputation verified (max diff={diff:.6f})")
-            
-            # Also verify touch
+
+            touch_unrolled = np.stack([np.log1p(touch_time_unrolled), (touch_time_unrolled > 0) * np.exp(-touch_time_unrolled / 0.5), np.clip(touch_time_unrolled, 0.0, 40.0)], axis=-1)
             stored_touch = item["touch"]
-            touch_diff = np.abs(touch_rolled - stored_touch).max()
+            touch_diff = np.abs(touch_unrolled - stored_touch).max()
             if touch_diff > 0.001:
                 print(f"    WARNING: Touch recomputation diff={touch_diff:.6f} from stored")
             else:
                 print(f"    Touch recomputation verified (max diff={touch_diff:.6f})")
+
+            sensor_rolled = np.roll(sensor, 2000)  # shared protocol: roll 2000 frames (20 s), per curve-018 diagnostic
+            touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=thr)
+            # v5: 3 touch features - log1p(t), exp(-t/0.5), clip(t,0,40)
+            touch_rolled = np.stack([np.log1p(touch_time_rolled), (touch_time_rolled > 0) * np.exp(-touch_time_rolled / 0.5), np.clip(touch_time_rolled, 0.0, 40.0)], axis=-1)
             
             sensor_rolled_t = torch.from_numpy(sensor_rolled).unsqueeze(0).unsqueeze(-1).to(device)
             touch_rolled_t = torch.from_numpy(touch_rolled).unsqueeze(0).to(device)
@@ -574,10 +735,10 @@ def main():
     # Write metrics.json
     metrics_path = os.path.join(args.out, "metrics.json")
     with open(metrics_path, "w") as f:
-        json.dump([{k: float(v) if isinstance(v, (np.float32, np.float64)) else v for k, v in m.items()} for m in all_metrics], f, indent=2)
+        json.dump([{k: float(v) if isinstance(v, (np.floating, float)) else v for k, v in m.items()} for m in all_metrics], f, indent=2)
     
     # Compute means
-    overall_mean = {k: np.mean([m[k] for m in all_metrics]) for k in ["multiscale_loss", "rms_envelope_corr", "centroid_corr", "rms_ratio"]}
+    overall_mean = {k: np.mean([m[k] for m in all_metrics]) for k in ["multiscale_loss", "silence_loss", "rms_envelope_corr", "centroid_corr", "rms_ratio"]}
     overall_mean["multiscale_abl_zero"] = np.mean([m.get("multiscale_abl_zero", 0) for m in all_metrics])
     overall_mean["rms_corr_abl_zero"] = np.mean([m.get("rms_corr_abl_zero", 0) for m in all_metrics])
     overall_mean["multiscale_abl_rolled"] = np.mean([m.get("multiscale_abl_rolled", 0) for m in all_metrics])
@@ -591,8 +752,79 @@ def main():
     for sound in sounds:
         sound_metrics = [m for m in all_metrics if m["sound"] == sound]
         if sound_metrics:
-            sound_means[sound] = {k: np.mean([m[k] for m in sound_metrics]) for k in ["multiscale_loss", "rms_envelope_corr", "centroid_corr", "rms_ratio"]}
+            sound_means[sound] = {k: np.mean([m[k] for m in sound_metrics]) for k in ["multiscale_loss", "silence_loss", "rms_envelope_corr", "centroid_corr", "rms_ratio"]}
     
+    # Compute ablation means directly from all_metrics per sound
+    ablation_means = {}
+    for sound in sounds:
+        sms = [m for m in all_metrics if m["sound"] == sound]
+        if sms:
+            ablation_means[sound] = {
+                "multiscale_abl_zero": float(np.mean([m["multiscale_abl_zero"] for m in sms if "multiscale_abl_zero" in m])),
+                "multiscale_abl_rolled": float(np.mean([m["multiscale_abl_rolled"] for m in sms if "multiscale_abl_rolled" in m])),
+                "rms_corr_abl_zero": float(np.mean([m["rms_corr_abl_zero"] for m in sms if "rms_corr_abl_zero" in m])),
+                "rms_corr_abl_rolled": float(np.mean([m["rms_corr_abl_rolled"] for m in sms if "rms_corr_abl_rolled" in m])),
+            }
+
+    # Attack metrics summary (per-sound & overall medians)
+    attack_keys = ["dpk_db", "dtpk_ms", "abs_dtpk_ms", "p_bump_db", "t_bump_db", "dpre_db", "dp300_db"]
+    sound_attack = {}
+    strict_pass_count = 0
+    for sound in sounds:
+        sms = [m for m in all_metrics if m["sound"] == sound]
+        total_onsets = sum(m.get("n_onsets", 0) for m in sms)
+        if total_onsets > 0:
+            s_dpk = float(np.nanmedian([m["dpk_db"] for m in sms]))
+            s_dtpk = float(np.nanmedian([m["dtpk_ms"] for m in sms]))
+            s_abs_dtpk = float(np.nanmedian([m["abs_dtpk_ms"] for m in sms]))
+            s_p_bump = float(np.nanmedian([m["p_bump_db"] for m in sms]))
+            s_t_bump = float(np.nanmedian([m["t_bump_db"] for m in sms]))
+            s_dpre = float(np.nanmedian([m["dpre_db"] for m in sms]))
+            s_dp300 = float(np.nanmedian([m["dp300_db"] for m in sms]))
+            passed = bool(abs(s_dpk) <= 4.0 and s_abs_dtpk <= 20.0)
+            if passed:
+                strict_pass_count += 1
+            sound_attack[sound] = {
+                "dpk_db": s_dpk,
+                "dtpk_ms": s_dtpk,
+                "abs_dtpk_ms": s_abs_dtpk,
+                "p_bump_db": s_p_bump,
+                "t_bump_db": s_t_bump,
+                "dpre_db": s_dpre,
+                "dp300_db": s_dp300,
+                "n_onsets": int(total_onsets),
+                "pass": passed,
+            }
+        else:
+            sound_attack[sound] = {k: float("nan") for k in attack_keys}
+            sound_attack[sound]["n_onsets"] = 0
+            sound_attack[sound]["pass"] = False
+
+    all_onsets = sum(m.get("n_onsets", 0) for m in all_metrics)
+    if all_onsets > 0:
+        overall_attack = {
+            k: float(np.nanmedian([m[k] for m in all_metrics])) for k in attack_keys
+        }
+        overall_attack["n_onsets"] = int(all_onsets)
+        overall_attack["pass"] = bool(abs(overall_attack["dpk_db"]) <= 4.0 and overall_attack["abs_dtpk_ms"] <= 20.0)
+    else:
+        overall_attack = {k: float("nan") for k in attack_keys}
+        overall_attack["n_onsets"] = 0
+        overall_attack["pass"] = False
+
+    attack_summary_out = {
+        "overall": overall_attack,
+        "per_sound": sound_attack,
+        "strict_pass_count": int(strict_pass_count),
+        "strict_pass_total": len(sounds),
+        "strict_pass_fraction": float(strict_pass_count / len(sounds)) if len(sounds) > 0 else 0.0,
+    }
+
+    # Save attack_summary.json
+    attack_summary_path = os.path.join(args.out, "attack_summary.json")
+    with open(attack_summary_path, "w") as f:
+        json.dump(attack_summary_out, f, indent=2)
+
     # Write STAGE_B_REPORT.md
     report_path = os.path.join(args.out, "STAGE_B_REPORT.md")
     with open(report_path, "w") as f:
@@ -611,8 +843,8 @@ def main():
         for sound in sounds:
             if sound in sound_means:
                 m = sound_means[sound]
-                silence_loss = 23.216  # Silence loss from training log
-                loss_ratio = m["multiscale_loss"] / silence_loss
+                silence_loss = m["silence_loss"]
+                loss_ratio = m["multiscale_loss"] / (silence_loss + 1e-8)
                 f.write(f"| {sound} | {m['multiscale_loss']:.6f} | {silence_loss:.6f} | {loss_ratio:.6f} |\n")
         
         f.write("\n## Metrics\n\n")
@@ -641,10 +873,33 @@ def main():
         f.write("| Sound | Ablation Zero MS Loss | Ablation Rolled MS Loss | RMS Corr Zero | RMS Corr Rolled |\n")
         f.write("|-------|------------------------|--------------------------|---------------|------------------|\n")
         for sound in sounds:
-            if sound in sound_means:
-                m = sound_means[sound]
-                f.write(f"| {sound} | {m.get('multiscale_abl_zero', 0):.6f} | {m.get('multiscale_abl_rolled', 0):.6f} | ")
-                f.write(f"{m.get('rms_corr_abl_zero', 0):.6f} | {m.get('rms_corr_abl_rolled', 0):.6f} |\n")
+            if sound in ablation_means:
+                am = ablation_means[sound]
+                f.write(f"| {sound} | {am['multiscale_abl_zero']:.6f} | {am['multiscale_abl_rolled']:.6f} | ")
+                f.write(f"{am['rms_corr_abl_zero']:.6f} | {am['rms_corr_abl_rolled']:.6f} |\n")
+
+        f.write("\n## Attack Metrics Summary\n\n")
+        f.write(f"- Strict criteria: |med dpk| <= 4 dB and med |dtpk| <= 20 ms\n")
+        f.write(f"- Strict pass count: {strict_pass_count} / {len(sounds)}\n\n")
+        f.write("### Overall Attack Medians\n\n")
+        f.write("| Metric | Value |\n")
+        f.write("|--------|-------|\n")
+        f.write(f"| dpk (dB) | {overall_attack['dpk_db']:.2f} |\n")
+        f.write(f"| dtpk (ms) | {overall_attack['dtpk_ms']:.1f} |\n")
+        f.write(f"| abs_dtpk (ms) | {overall_attack['abs_dtpk_ms']:.1f} |\n")
+        f.write(f"| pred bump (dB) | {overall_attack['p_bump_db']:.2f} |\n")
+        f.write(f"| target bump (dB) | {overall_attack['t_bump_db']:.2f} |\n")
+        f.write(f"| dpre (dB) | {overall_attack['dpre_db']:.2f} |\n")
+        f.write(f"| dp300 (dB) | {overall_attack['dp300_db']:.2f} |\n")
+        f.write(f"| Total onsets | {overall_attack['n_onsets']} |\n\n")
+        f.write("### Per-Sound Attack Medians\n\n")
+        f.write("| Sound | Onsets | med dpk (dB) | med dtpk (ms) | med |dtpk| (ms) | pred bump (dB) | target bump (dB) | Pass |\n")
+        f.write("|-------|--------|--------------|---------------|-------------------|----------------|------------------|------|\n")
+        for sound in sounds:
+            if sound in sound_attack:
+                sa = sound_attack[sound]
+                pass_str = "PASS" if sa["pass"] else "FAIL"
+                f.write(f"| {sound} | {sa['n_onsets']} | {sa['dpk_db']:.2f} | {sa['dtpk_ms']:.1f} | {sa['abs_dtpk_ms']:.1f} | {sa['p_bump_db']:.2f} | {sa['t_bump_db']:.2f} | {pass_str} |\n")
         
         f.write("\n## Pass/Fail Criteria\n\n")
         f.write("- Audible: peak > 1e-3, RMS 0.4-2.0\n")
