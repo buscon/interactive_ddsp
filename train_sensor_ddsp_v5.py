@@ -10,6 +10,8 @@ import json
 import yaml
 import subprocess
 import time
+import inspect
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -102,50 +104,216 @@ def find_good_chunk(audio, touch_raw, min_touch_seconds=2.0, chunk_s=10.0, sr=48
     return best_offset, touch_seconds, chunk_audio, chunk_sensor, chunk_touch
 
 
+def compute_env_db(x, hop=96, win=240):
+    """Compute frame-level RMS energy envelope in dB."""
+    x = np.asarray(x, dtype=np.float32)
+    n = (len(x) - win) // hop + 1
+    if n <= 0:
+        return np.array([], dtype=np.float32)
+    idx = np.arange(n)[:, None] * hop + np.arange(win)[None, :]
+    r = np.sqrt(np.mean(x[idx] ** 2, axis=1) + 1e-12)
+    return 20.0 * np.log10(r + 1e-9)
+
+
+def onsets_from_touch(tt):
+    """Find onset indices (control frames) from touch time/raw array where tt crosses > 0."""
+    tt = np.asarray(tt)
+    a = tt > 0
+    return np.where(a[1:] & ~a[:-1])[0] + 1
+
+
 def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
-    """Evaluate model on validation items and return loss and per-sound losses."""
+    """
+    Evaluate model on validation items (D6 full-file validation + onset attack metrics).
+    Splits each val_item into all non-overlapping chunks across the full file
+    (plus final tail chunk if remaining >= chunk_frames // 2), computes loss_fn + silence_loss
+    per chunk (averaging per file, then per sound/overall).
+    Also stitches predictions to compute event-locked attack metrics:
+      med_dpk_db, med_abs_dpk_db, med_dtpk_ms, med_abs_dtpk_ms, med_p_bump_db, med_t_bump_db.
+    Returns:
+      (val_loss, silence_loss, val_losses_by_sound, silence_by_sound, attack_stats)
+    """
     model.eval()
     val_losses = []
     silence_losses = []
     sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
     val_losses_by_sound = {s: [] for s in sound_names_ordered}
     silence_by_sound = {s: [] for s in sound_names_ordered}
-    
+
+    SR = 48000
+    HOP = 96
+    WIN = 240
+    chunk_frames = int(chunk_s * 100)
+
+    all_dpk = []
+    all_abs_dpk = []
+    all_dtpk = []
+    all_abs_dtpk = []
+    all_p_bump = []
+    all_t_bump = []
+
     with torch.no_grad():
         for val_item in val_items:
-            # Prepare batch
-            audio = torch.from_numpy(val_item["audio"][:int(chunk_s * 100 * 480)]).unsqueeze(0).to(device)
-            sensor = torch.from_numpy(val_item["sensor"][:int(chunk_s * 100)]).unsqueeze(0).unsqueeze(-1).to(device)
-            touch = torch.from_numpy(val_item["touch"][:int(chunk_s * 100)]).unsqueeze(0).to(device)
-            if touch.dim() == 2:
-                touch = touch.unsqueeze(-1)
-            sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
-            note = torch.from_numpy(np.asarray(val_item.get("note", np.zeros_like(val_item["sensor"])), dtype=np.float32)[:int(chunk_s * 100)]).unsqueeze(0).to(device)
-            if note.dim() == 2:
-                note = note.unsqueeze(-1)
+            T_total = len(val_item["sensor"])
+            if T_total == 0:
+                continue
 
-            pred = model(sensor, touch, sound_id, note=note).squeeze(-1)
-            val_l = model.loss_fn(pred, audio, scales, overlap)
-            val_losses.append(val_l.item())
-            
-            # Silence baseline
-            sil_l = model.silence_loss(audio, scales, overlap)
-            silence_losses.append(sil_l.item())
-            
-            # Collect by sound
-            sound = val_item["sound"]
-            if sound in val_losses_by_sound:
-                val_losses_by_sound[sound].append(val_l.item())
-            if sound in silence_by_sound:
-                silence_by_sound[sound].append(sil_l.item())
-    
+            # Non-overlapping chunk offsets across the full file
+            offsets = list(range(0, T_total - chunk_frames + 1, chunk_frames))
+            last_end = offsets[-1] + chunk_frames if offsets else 0
+            rem = T_total - last_end
+            if rem >= chunk_frames // 2:
+                tail_off = max(0, T_total - chunk_frames)
+                if not offsets or tail_off != offsets[-1]:
+                    offsets.append(tail_off)
+            elif not offsets:
+                offsets = [0]
+
+            file_val_losses = []
+            file_sil_losses = []
+            chunk_preds_dict = {}
+
+            for off in offsets:
+                end = off + chunk_frames
+                raw_audio = val_item["audio"][off * 480 : end * 480]
+                raw_sensor = val_item["sensor"][off : end]
+                raw_touch = val_item["touch"][off : end]
+                raw_note = np.asarray(val_item.get("note", np.zeros_like(val_item["sensor"])), dtype=np.float32)[off : end]
+
+                # Pad chunk if needed (e.g. if T_total < chunk_frames)
+                if len(raw_sensor) < chunk_frames:
+                    pad_f = chunk_frames - len(raw_sensor)
+                    raw_audio = np.pad(raw_audio, (0, pad_f * 480), mode="constant")
+                    raw_sensor = np.pad(raw_sensor, (0, pad_f), mode="constant")
+                    raw_touch = np.pad(raw_touch, ((0, pad_f), (0, 0)), mode="constant")
+                    raw_note = np.pad(raw_note, (0, pad_f), mode="constant")
+
+                audio = torch.from_numpy(raw_audio).unsqueeze(0).to(device)
+                sensor = torch.from_numpy(raw_sensor).unsqueeze(0).unsqueeze(-1).to(device)
+                touch = torch.from_numpy(raw_touch).unsqueeze(0).to(device)
+                if touch.dim() == 2:
+                    touch = touch.unsqueeze(-1)
+                sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
+                note = torch.from_numpy(raw_note).unsqueeze(0).to(device)
+                if note.dim() == 2:
+                    note = note.unsqueeze(-1)
+
+                pred = model(sensor, touch, sound_id, note=note).squeeze(-1)
+                val_l = model.loss_fn(pred, audio, scales, overlap)
+                sil_l = model.silence_loss(audio, scales, overlap)
+
+                file_val_losses.append(val_l.item())
+                file_sil_losses.append(sil_l.item())
+                chunk_preds_dict[off] = pred.squeeze(0).cpu().numpy()
+
+            if file_val_losses:
+                file_mean_val = float(np.mean(file_val_losses))
+                file_mean_sil = float(np.mean(file_sil_losses))
+                val_losses.append(file_mean_val)
+                silence_losses.append(file_mean_sil)
+
+                sound = val_item.get("sound")
+                if sound in val_losses_by_sound:
+                    val_losses_by_sound[sound].append(file_mean_val)
+                if sound in silence_by_sound:
+                    silence_by_sound[sound].append(file_mean_sil)
+
+            # Stitch non-overlapping predictions across the file for attack metrics
+            non_overlap_offs = list(range(0, T_total - chunk_frames + 1, chunk_frames))
+            if not non_overlap_offs:
+                non_overlap_offs = [0]
+            stitched_preds = []
+            for noff in non_overlap_offs:
+                if noff in chunk_preds_dict:
+                    p = chunk_preds_dict[noff]
+                else:
+                    end = noff + chunk_frames
+                    raw_sensor = val_item["sensor"][noff : end]
+                    raw_touch = val_item["touch"][noff : end]
+                    raw_note = np.asarray(val_item.get("note", np.zeros_like(val_item["sensor"])), dtype=np.float32)[noff : end]
+                    if len(raw_sensor) < chunk_frames:
+                        pad_f = chunk_frames - len(raw_sensor)
+                        raw_sensor = np.pad(raw_sensor, (0, pad_f), mode="constant")
+                        raw_touch = np.pad(raw_touch, ((0, pad_f), (0, 0)), mode="constant")
+                        raw_note = np.pad(raw_note, (0, pad_f), mode="constant")
+                    sensor = torch.from_numpy(raw_sensor).unsqueeze(0).unsqueeze(-1).to(device)
+                    touch = torch.from_numpy(raw_touch).unsqueeze(0).to(device)
+                    if touch.dim() == 2:
+                        touch = touch.unsqueeze(-1)
+                    sound_id = torch.tensor([val_item["sound_id"]], dtype=torch.long, device=device)
+                    note = torch.from_numpy(raw_note).unsqueeze(0).to(device)
+                    if note.dim() == 2:
+                        note = note.unsqueeze(-1)
+                    p = model(sensor, touch, sound_id, note=note).squeeze(-1).squeeze(0).cpu().numpy()
+                stitched_preds.append(p)
+
+            pred_full = np.concatenate(stitched_preds)
+            tgt_full = val_item["audio"][:len(pred_full)]
+            if len(tgt_full) < len(pred_full):
+                pred_full = pred_full[:len(tgt_full)]
+
+            if len(pred_full) >= WIN:
+                ep = compute_env_db(pred_full, hop=HOP, win=WIN)
+                et = compute_env_db(tgt_full, hop=HOP, win=WIN)
+
+                if "touch_raw" in val_item and val_item["touch_raw"] is not None:
+                    tt = val_item["touch_raw"]
+                elif "touch_time" in val_item and val_item["touch_time"] is not None:
+                    tt = val_item["touch_time"]
+                else:
+                    tt = val_item["touch"][:, 0]
+
+                ons = onsets_from_touch(tt)
+                for o in ons:
+                    f0 = int(round(o * 0.01 * SR / HOP))
+                    if f0 < 50 or f0 + 160 > len(et) or f0 + 160 > len(ep):
+                        continue
+                    p_seg = ep[f0 : f0 + 150]
+                    t_seg = et[f0 : f0 + 150]
+                    p_pk = float(p_seg.max())
+                    t_pk = float(t_seg.max())
+                    p_tpk = float(p_seg.argmax() * (HOP / SR * 1000.0))
+                    t_tpk = float(t_seg.argmax() * (HOP / SR * 1000.0))
+                    p_p300 = float(np.median(ep[f0 + 140 : f0 + 160]))
+                    t_p300 = float(np.median(et[f0 + 140 : f0 + 160]))
+
+                    dpk = p_pk - t_pk
+                    dtpk = p_tpk - t_tpk
+                    p_bump = p_pk - p_p300
+                    t_bump = t_pk - t_p300
+
+                    all_dpk.append(dpk)
+                    all_abs_dpk.append(abs(dpk))
+                    all_dtpk.append(dtpk)
+                    all_abs_dtpk.append(abs(dtpk))
+                    all_p_bump.append(p_bump)
+                    all_t_bump.append(t_bump)
+
     model.train()
-    
-    # Compute means
-    val_loss = np.mean(val_losses) if val_losses else None
-    silence_loss = np.mean(silence_losses) if silence_losses else None
-    
-    return val_loss, silence_loss, val_losses_by_sound, silence_by_sound
+
+    val_loss = float(np.mean(val_losses)) if val_losses else None
+    silence_loss = float(np.mean(silence_losses)) if silence_losses else None
+
+    if all_dpk:
+        attack_stats = {
+            "med_dpk_db": float(np.median(all_dpk)),
+            "med_abs_dpk_db": float(np.median(all_abs_dpk)),
+            "med_dtpk_ms": float(np.median(all_dtpk)),
+            "med_abs_dtpk_ms": float(np.median(all_abs_dtpk)),
+            "med_p_bump_db": float(np.median(all_p_bump)),
+            "med_t_bump_db": float(np.median(all_t_bump)),
+        }
+    else:
+        attack_stats = {
+            "med_dpk_db": 0.0,
+            "med_abs_dpk_db": 0.0,
+            "med_dtpk_ms": 0.0,
+            "med_abs_dtpk_ms": 0.0,
+            "med_p_bump_db": 0.0,
+            "med_t_bump_db": 0.0,
+        }
+
+    return val_loss, silence_loss, val_losses_by_sound, silence_by_sound, attack_stats
 
 
 def prepare_batch(item, device, chunk_s):
@@ -243,9 +411,9 @@ def main():
     # Logging
     writer = SummaryWriter(run_dir, flush_secs=20)
     
-    # CSV header with per-sound val columns
+    # CSV header with per-sound val columns and attack metrics
     sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
-    csv_header = "step,train_loss,report_loss,val_loss,silence_loss," + ",".join([f"val_{s}" for s in sound_names_ordered]) + "," + ",".join([f"sil_{s}" for s in sound_names_ordered]) + "\n"
+    csv_header = "step,train_loss,report_loss,val_loss,silence_loss," + ",".join([f"val_{s}" for s in sound_names_ordered]) + "," + ",".join([f"sil_{s}" for s in sound_names_ordered]) + ",val_med_abs_dpk_db,val_med_abs_dtpk_ms,val_med_p_bump_db\n"
     log_file = open(os.path.join(run_dir, "train_log.csv"), "w")
     log_file.write(csv_header)
     
