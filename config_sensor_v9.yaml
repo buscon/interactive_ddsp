@@ -1,4 +1,10 @@
 # V9 config — trained from scratch on the v6 aligned dataset (sensor-clock audio, align_audio off)
+#
+# LAUNCH (exact command; the trainer does NOT read the train: block below):
+#   python3 train_sensor_ddsp_v5.py --config config_sensor_v9.yaml --name <run> --root runs/bakeoff_ddsp_poc --steps 2000 --batch 8
+# train_sensor_ddsp_v5.py takes steps/batch/eval_every from the CLI only (defaults: steps 800, batch 1).
+# Its LR is warm-up (100 steps) then constant lr_start=1e-3; the train: block (lr_stop, decay_over, scales,
+# overlap, eval_curves, save_every) is documentation only and is NOT read by the trainer.
 # Based on config_sensor_v8c_a.yaml (V8c Arm A: loss norm, vibrato lag, fast_head lag+10x lr)
 # Dataset: Dataset_v6_20261122_aligned; val curves 004/011/017, test curves 007/014/020
 
@@ -35,9 +41,10 @@ model:
   lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
 
   # V9: per-sound attack lag (s, sound_id order canopy, forestPad, swarm, modularPercussions, moss)
-  # = touch-layer onset lag 2/5/44/22/4 ms + 21.3 ms limiter delay of the master target.
+  # = touch-layer onset lag 2/5/44/40/4 ms + 21.3 ms limiter delay of the master target.
+  # modularPercussions: master onset frame starts 40 ms after frame i-1 (lag 0.040 s).
   # Measured in docs/V9_LAG_MEASUREMENT.md.
-  attack_lag_s: [0.023, 0.026, 0.065, 0.043, 0.025]
+  attack_lag_s: [0.023, 0.026, 0.065, 0.040, 0.025]
 
   # V9: onset weighting (onset-weighted spectral + RMS loss, causal)
   onset_weighting:
@@ -54,9 +61,10 @@ loss_weights:
   w_attack: 0.0          # Keep OFF (ablation proved harmful)
   w_mod_spec: 0.0        # Keep OFF
 
-# Train schedule: from-scratch schedule copied from config_sensor.yaml / config_sensor_v6.yaml
-# (lr 1e-3 -> 1e-4 over 1000 steps, 2000 steps total). The 1000-step fine-tune schedule of
-# v8c_a is NOT used; there is no finetune block / init_checkpoint, so nothing is silently fine-tuned.
+# train: block is DOCUMENTATION ONLY (not read by train_sensor_ddsp_v5.py). Values copied from
+# config_sensor.yaml / config_sensor_v6.yaml, i.e. the from-scratch schedule intent. The effective run
+# is set by CLI (--steps 2000 --batch 8) and the trainer's warm-up + constant lr_start 1e-3.
+# The 1000-step fine-tune schedule of v8c_a is NOT used; there is no finetune block / init_checkpoint.
 train:
   batch: 8
   lr_start: 1.0e-3
@@ -67,5 +75,5 @@ train:
   steps: 2000
   seed: 0
   eval_every: 250
-  eval_curves: [004, 011, 017]  # v6 held-out val curves
+  eval_curves: ["004", "011", "017"]  # v6 held-out val curves (quoted: YAML would parse 004/011 as octal)
   save_every: 250

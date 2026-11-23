@@ -230,7 +230,7 @@ def main():
     try:
         git_hash = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], 
-            cwd="/home/marcello/Documents/interactive_ddsp"
+            cwd=os.path.dirname(os.path.abspath(__file__))
         ).decode().strip()
     except:
         git_hash = "unknown"

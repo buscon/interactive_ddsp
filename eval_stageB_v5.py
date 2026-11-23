@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 # Add the project to path for imports
 import sys
-sys.path.insert(0, "/home/marcello/Documents/interactive_ddsp")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from engine_ddsp.sensor_data_v5 import AlignedChunkDatasetV5 as AlignedChunkDataset
 from engine_ddsp.sensor_ddsp import SensorDDSP
@@ -178,7 +178,7 @@ def _estimate_f0_autocorr(x, sr=48000, fmin=50.0, fmax=500.0):
     x = x - x.mean()
     if np.sqrt((x**2).mean()) < 1e-3:
         return None
-    ac = np.correlate(x, x, mode='full')[len(x)-1:]
+    ac = signal.correlate(x, x, mode='full', method='fft')[len(x)-1:]
     if ac[0] <= 0:
         return None
     ac = ac / ac[0]
@@ -324,8 +324,6 @@ def main():
     overlap = run_config["train"]["overlap"]
     chunk_s = run_config["data"]["chunk_s"]
     
-    print(f"\nRendering {len(sounds) * len(curves)} combinations...")
-    
     # Dataset for loading full files
     root = run_config["data"]["root"]
     full_dataset = AlignedChunkDataset(
@@ -340,6 +338,7 @@ def main():
     else:
         curves = sorted({f["curve"] for f in full_dataset.files})
     print(f"Curves to render ({args.split}): {curves}")
+    print(f"\nRendering {len(sounds) * len(curves)} combinations...")
 
     for sound in sounds:
         for curve in curves:
