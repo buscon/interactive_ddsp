@@ -4,6 +4,7 @@ SensorDDSP rendering script.
 Renders audio from the trained model and computes metrics.
 """
 import argparse
+import inspect
 import os
 import sys
 import json
@@ -21,6 +22,17 @@ sys.path.insert(0, "/home/marcello/Documents/interactive_ddsp")
 from engine_ddsp.sensor_data import AlignedChunkDataset
 from engine_ddsp.sensor_ddsp import SensorDDSP
 from engine_ddsp.synth import multiscale_fft, safe_log
+
+
+def ctor_kwargs(cls, **kwargs):
+    """Keep only the kwargs that cls.__init__ accepts (old loaders lack notes_json/align_audio).
+    Returns (kept_kwargs, dropped_names)."""
+    params = inspect.signature(cls.__init__).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return dict(kwargs), []
+    kept = {k: v for k, v in kwargs.items() if k in params}
+    dropped = [k for k in kwargs if k not in params]
+    return kept, dropped
 
 
 def compute_touch_from_sensor(sensor, threshold=0.98):
@@ -169,6 +181,10 @@ def main():
     p.add_argument("--curves", nargs="+", default=["017", "018", "019", "020"], help="Curve IDs to render")
     p.add_argument("--split", default="val", choices=["train", "val"], help="Dataset split (train or val)")
     p.add_argument("--overfit_file", action="store_true", help="Render overfit file (03_harmonicSwarm_001)")
+    p.add_argument("--data-root", default=None,
+                   help="Dataset root (index.json, f0_base.json, metadata.json). Default: run config data.root")
+    p.add_argument("--notes-json", default=None,
+                   help="Onset/notes JSON. Default: run config data.notes_json (if set)")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -181,19 +197,40 @@ def main():
     with open(config_path) as f:
         run_config = yaml.safe_load(f)
     
-    # Build f0_base list
-    with open("bakeoff_data_aligned/index.json") as f:
+    # Resolve dataset root / notes: CLI override > run config > legacy default
+    data_cfg = run_config.get("data", {}) or {}
+    data_root = args.data_root or data_cfg.get("root")
+    notes_json = args.notes_json or data_cfg.get("notes_json")
+    index_dir = data_root or "bakeoff_data_aligned"
+    print(f"Data root: {index_dir}")
+
+    with open(os.path.join(index_dir, "index.json")) as f:
         index = json.load(f)
-    
-    with open("bakeoff_data_aligned/f0_base.json") as f:
-        f0_base_json = json.load(f)
-    
-    # Order by sound_ids integer values
-    sound_names = sorted(f0_base_json.keys(), key=lambda k: index["sound_ids"][k])
-    f0_base = [f0_base_json[s]["f0_hz"] for s in sound_names]
+
+    # Build f0_base: prefer f0_base.json, else model.f0_base_hz_override from config
+    f0_json_path = os.path.join(index_dir, "f0_base.json")
+    if os.path.exists(f0_json_path):
+        with open(f0_json_path) as f:
+            f0_base_json = json.load(f)
+        # Order by sound_ids integer values
+        sound_names = sorted(f0_base_json.keys(), key=lambda k: index["sound_ids"][k])
+        f0_base = [f0_base_json[s]["f0_hz"] for s in sound_names]
+    else:
+        override = run_config["model"].get("f0_base_hz_override")
+        if override is None:
+            raise SystemExit(f"No {f0_json_path} and no model.f0_base_hz_override in {config_path}")
+        sound_names = sorted(index["sound_ids"], key=lambda k: index["sound_ids"][k])
+        if len(override) != len(sound_names):
+            raise SystemExit(f"f0_base_hz_override has {len(override)} entries, index has {len(sound_names)} sounds")
+        f0_base = [float(v) for v in override]
+        f0_base_json = {s: {"f0_hz": v} for s, v in zip(sound_names, f0_base)}
+        print(f"f0_base.json not found; using model.f0_base_hz_override: {f0_base}")
     
     # Create model
     model_config = run_config["model"].copy()
+    # Same keys train_sensor_ddsp_v5.py strips before constructing SensorDDSP
+    for _k in ("f0_base_hz_override", "lfo_rate_base", "lfo_depth_mul_base", "lfo_depth_add_base"):
+        model_config.pop(_k, None)
     model_config["f0_base_hz"] = f0_base
     model = SensorDDSP(**model_config).to(device)
     model.eval()
@@ -229,14 +266,35 @@ def main():
     scales = run_config["train"]["scales"]
     overlap = run_config["train"]["overlap"]
     chunk_s = run_config["data"]["chunk_s"]
-    
+
+    # Touch threshold from dataset metadata (train/eval consistency)
+    thr = 0.98
+    if data_root:
+        _meta = os.path.join(data_root, "metadata.json")
+    else:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        _meta = os.path.join(_here, "bakeoff_data_aligned_v8", "metadata.json")
+        if not os.path.exists(_meta):
+            _meta = os.path.join(_here, "bakeoff_data_aligned_v5", "metadata.json")
+    if os.path.exists(_meta):
+        thr = float(json.load(open(_meta)).get("touch_threshold", 0.98))
+    print(f"Touch threshold: {thr}")
+
     print(f"\nRendering {len(sounds) * len(curves)} combinations...")
     
     # Dataset for loading full files
-    root = run_config["data"]["root"]
+    root = index_dir
+    loader_kw, dropped = ctor_kwargs(
+        AlignedChunkDataset,
+        notes_json=notes_json,
+        align_audio=data_cfg.get("align_audio", False),
+    )
+    if dropped:
+        print(f"  NOTE: AlignedChunkDataset does not accept {dropped}; not passed")
     full_dataset = AlignedChunkDataset(
         root, split=args.split, chunk_s=chunk_s,
-        epoch_len=None, seed=0, train=False  # train=False for deterministic
+        epoch_len=None, seed=0, train=False,  # train=False for deterministic
+        **loader_kw
     )
     
     for sound in sounds:
@@ -393,12 +451,6 @@ def main():
             # Dataset rule: run length in seconds of consecutive frames with sensor >= 0.98
             sensor_rolled = np.roll(sensor, len(sensor) // 2)
             # V8b: read touch threshold from dataset metadata (train/eval consistency)
-            thr = 0.98
-            _meta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bakeoff_data_aligned_v8", "metadata.json")
-            if not os.path.exists(_meta):
-                _meta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bakeoff_data_aligned_v5", "metadata.json")
-            if os.path.exists(_meta):
-                thr = float(json.load(open(_meta)).get("touch_threshold", 0.98))
             touch_time_rolled = compute_touch_from_sensor(sensor_rolled, threshold=thr)
             touch_rolled = np.clip(touch_time_rolled / 30.0, 0.0, 2.0)
             
