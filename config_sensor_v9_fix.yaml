@@ -1,0 +1,80 @@
+# V9 fix config — trained from scratch on the v6 aligned dataset
+#
+# Changes vs config_sensor_v9.yaml:
+# - onset_weighting: pre_ms 20, peak_ms 40 (was 25 / 90)
+# - loss_weights: w_lin 100.0, w_rms 4.0, onset_rms_factor null
+# - model: touch_amp_head false
+# - train: lr_stop 1.0e-4, decay_over 2000 (now read by train_sensor_ddsp_v5.py)
+#
+# LAUNCH:
+#   python3 train_sensor_ddsp_v5.py --config config_sensor_v9_fix.yaml --name <run> --root runs/bakeoff_ddsp_poc --steps 2000 --batch 8
+#
+# Dataset: Dataset_v6_20261122_aligned; val curves 004/011/017, test curves 007/014/020
+
+data:
+  root: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_data_aligned_v6
+  chunk_s: 10.0
+  train_sounds: null  # null = all
+  val_sounds: null
+  train_curves: null  # null = all in train split
+  val_curves: null
+  # Touch onsets from sensor crossing 0.98 (OSC touch trigger), v6 notes
+  notes_json: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_notes_v6.json
+  # v6 audio is already on the sensor clock: no audio shift / trim
+  align_audio: false
+
+model:
+  n_sounds: 5
+  hidden_size: 512
+  n_harmonic: 100
+  n_bands: 65
+  sampling_rate: 48000
+  block_size: 480
+  sound_emb_dim: 16
+  max_f0_octaves: 2.0
+  # f0 roots from Sentire SC sources (sound_id order: canopy, forestPad, swarm, percussion, moss)
+  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+
+  # v5/v6: LFO base tables (per sound) - from SC sources
+  # canopy: rate=1+clip(0.3t,1,30), depth_add=0.5t clip 0..20 (additive FM)
+  # swarm: rate=0.1+0.03t, depth_mul=(0.3+0.8t)% multiplicative
+  # forestPad/moss/percussion: no LFO
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
+
+  # V9: per-sound attack lag (s, sound_id order canopy, forestPad, swarm, modularPercussions, moss)
+  attack_lag_s: [0.023, 0.026, 0.065, 0.040, 0.025]
+
+  # V9: onset weighting (onset-weighted spectral + RMS loss, causal)
+  onset_weighting:
+    enabled: true
+    factor: 5.0          # k=5.0
+    pre_ms: 20           # flat pre-roll before onset
+    window_ms: 400       # causal gamma window after onset
+    peak_ms: 40          # gamma peak after onset
+    touch_rate_hz: 100   # Touch feature rate
+
+  touch_amp_head: false
+
+# Loss weights
+loss_weights:
+  w_multiscale: 1.0
+  w_lin: 100.0
+  w_rms: 4.0
+  onset_rms_factor: null
+  w_attack: 0.0          # Keep OFF (ablation proved harmful)
+  w_mod_spec: 0.0        # Keep OFF
+
+train:
+  batch: 8
+  lr_start: 1.0e-3
+  lr_stop: 1.0e-4
+  decay_over: 2000  # steps: read by train_sensor_ddsp_v5.py for cosine decay schedule
+  scales: [4096, 2048, 1024, 512, 256, 128]
+  overlap: 0.75
+  steps: 2000
+  seed: 0
+  eval_every: 250
+  eval_curves: ["004", "011", "017"]  # v6 held-out val curves
+  save_every: 250
