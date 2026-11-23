@@ -49,7 +49,9 @@ class SensorDDSP(nn.Module):
     def __init__(self, f0_base_hz, n_sounds=5, hidden_size=512,
                  n_harmonic=100, n_bands=65, sampling_rate=48000,
                  block_size=480, sound_emb_dim=16, max_f0_octaves=1.0,
-                 tilt_init=True, onset_weighting=None, attack_lag_s=None):
+                 tilt_init=True, onset_weighting=None, attack_lag_s=None,
+                 w_lin=100.0, w_rms=1.0, onset_rms_factor=None,
+                 touch_amp_head=False):
         """
         Args:
             f0_base_hz: list of base f0 per sound ID (len = n_sounds)
@@ -73,6 +75,10 @@ class SensorDDSP(nn.Module):
             attack_lag_s: optional list/tuple/tensor of per-sound attack lags in seconds
                 (order canopy, forestPad, swarm, modularPercussions, moss); None keeps
                 the built-in defaults.
+            w_lin: linear spectral loss weight (default 100.0)
+            w_rms: RMS envelope loss weight (default 1.0)
+            onset_rms_factor: optional factor override for RMS envelope onset weighting
+            touch_amp_head: if True, enables additive post-scale_function touch transient bypass
         """
         super().__init__()
         
@@ -87,6 +93,10 @@ class SensorDDSP(nn.Module):
         self.w_mod_spec = 0.0   # v5 experimental losses default OFF (v5 run regressed: val 28.3 > silence 23.2)
         self.w_attack = 0.0
         self.tilt_init = tilt_init
+        self.w_lin = float(w_lin)
+        self.w_rms = float(w_rms)
+        self.onset_rms_factor = float(onset_rms_factor) if onset_rms_factor is not None else None
+        self.touch_amp_head_enabled = bool(touch_amp_head)
         
         # Onset weighting parameters
         if onset_weighting is None:
@@ -163,6 +173,15 @@ class SensorDDSP(nn.Module):
         if attack_lag_s is not None:
             self.set_attack_lag(attack_lag_s)
 
+        # Optional additive post-scale_function touch transient bypass
+        if self.touch_amp_head_enabled:
+            self.touch_amp_proj = nn.Linear(3 + sound_emb_dim, 1 + n_harmonic + n_bands)
+            with torch.no_grad():
+                self.touch_amp_proj.weight.zero_()
+                self.touch_amp_proj.bias.fill_(-6.0)
+        else:
+            self.touch_amp_proj = None
+
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
         
@@ -210,9 +229,9 @@ class SensorDDSP(nn.Module):
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
-        # V8b: allow checkpoints that predate fast_head (e.g. V6 state_final.pth)
+        # V8b/V9: allow checkpoints that predate fast_head or touch_amp_proj (e.g. V6 state_final.pth)
         for name, p in self.named_parameters():
-            if name.startswith('fast_head.') and (prefix + name) not in state_dict:
+            if (name.startswith('fast_head.') or name.startswith('touch_amp_proj.')) and (prefix + name) not in state_dict:
                 state_dict[prefix + name] = p.detach().clone()
         for name, b in self.named_buffers():
             if name == 'attack_lag_s' and (prefix + name) not in state_dict:
@@ -321,7 +340,7 @@ class SensorDDSP(nn.Module):
         # V8c: SC-formula vibrato with lagged timer: t_sc = clamp(t_sec - lag, 0) * in_touch
         # canopy SC: depth_add = clip(0.5*t, 0, 20); rate = 1 + clip(0.3*t, 1, 30)
         t_sc = (t_sec_raw - lag).clamp(min=0) * in_t                       # (B,T,1)
-        depth_add_t = (0.5 * t_sc).clamp(max=20.0) + 0.1 * depth_add_emb.view(-1, 1, 1)  # emb already indexed (B,)
+        depth_add_t = ((0.5 * t_sc).clamp(max=20.0) + 0.1 * depth_add_emb.view(-1, 1, 1)) * (self.lfo_depth_add_base[sound_id] > 0).float().view(-1, 1, 1)
         rate_t = 1.0 + (0.3 * t_sc).clamp(1.0, 30.0) + 0.1 * rate_emb.view(-1, 1, 1)  # (B,T,1) Hz
         phase = torch.cumsum(rate_t.squeeze(-1) / 100.0, dim=1)            # (B,T) cycles, time-varying rate
         sin_phase = torch.sin(2 * torch.pi * phase).unsqueeze(-1)           # (B,T,1)
@@ -343,6 +362,22 @@ class SensorDDSP(nn.Module):
         amplitudes = remove_above_nyquist(amplitudes, f0, self.sampling_rate)
         amplitudes = amplitudes / (amplitudes.sum(-1, keepdim=True) + 1e-8)
         amplitudes = amplitudes * total_amp
+
+        # Filtered noise
+        # noise_param has shape (B, T, n_bands) - one per frame
+        # Apply scale function like original EngineDDSP: scale_function(noise_param - 5)
+        # This ensures small initial amplitudes (shifts mean to ~0 before scaling)
+        noise_scaled = scale_function(noise_param - 5)
+
+        # Optional additive post-scale_function touch transient bypass
+        if self.touch_amp_head_enabled:
+            raw = self.touch_amp_proj(torch.cat([fast, emb], dim=-1))
+            t_harm_amp = gate * F.softplus(raw[..., :1])
+            t_harm_dist = F.softmax(raw[..., 1:1 + self.n_harmonic], dim=-1)
+            t_harm = remove_above_nyquist(t_harm_dist * t_harm_amp, f0, self.sampling_rate)
+            amplitudes = amplitudes + t_harm
+            t_noise = gate * F.softplus(raw[..., 1 + self.n_harmonic:])
+            noise_scaled = noise_scaled + t_noise
         
         # Upsample to audio rate
         amplitudes_up = upsample(amplitudes, self.block_size)  # (B, T*block_size, n_harmonic)
@@ -351,14 +386,8 @@ class SensorDDSP(nn.Module):
         # Harmonic synthesis
         harmonic = harmonic_synth(f0_up, amplitudes_up, self.sampling_rate)  # (B, T*block_size, 1)
         
-        # Filtered noise
-        # noise_param has shape (B, T, n_bands) - one per frame
-        # Apply scale function like original EngineDDSP: scale_function(noise_param - 5)
-        # This ensures small initial amplitudes (shifts mean to ~0 before scaling)
-        noise_param = scale_function(noise_param - 5)
-        
         # Create impulse responses for each frame
-        impulse = amp_to_impulse_response(noise_param, self.block_size)  # (B, T, block_size)
+        impulse = amp_to_impulse_response(noise_scaled, self.block_size)  # (B, T, block_size)
         
         # Generate noise (B, T, block_size) - one noise segment per frame
         noise = torch.rand(B, T, self.block_size, dtype=harmonic.dtype, device=harmonic.device) * 2 - 1
@@ -482,19 +511,17 @@ class SensorDDSP(nn.Module):
         """L1 in octaves between predicted and target-estimated f0 on voiced blocks."""
         f0_t = self.estimate_f0_track(target)  # (B, T), NaN unvoiced
         f0_p = f0_pred.squeeze(-1)  # (B, T)
-        # Clamp f0 values to valid range and replace NaN with safe value
-        f0_p = torch.nan_to_num(f0_p, nan=100.0, posinf=2000.0, neginf=20.0)
-        f0_t = torch.nan_to_num(f0_t, nan=100.0, posinf=2000.0, neginf=20.0)
-        # Clamp to valid f0 range
-        f0_p = torch.clamp(f0_p, 20.0, 2000.0)
-        f0_t = torch.clamp(f0_t, 20.0, 2000.0)
-        mask = ~torch.isnan(f0_t)
+        mask = (~torch.isnan(f0_t)) & (f0_t >= 20.0) & (f0_t <= 2000.0)
         if mask.sum() == 0:
             return (f0_p * 0.0).mean()
-        err = (torch.log2(f0_p[mask]) - torch.log2(f0_t[mask])).abs().mean()
+        f0_p_m = torch.clamp(torch.nan_to_num(f0_p[mask], nan=100.0, posinf=2000.0, neginf=20.0), 20.0, 2000.0)
+        f0_t_m = torch.clamp(torch.nan_to_num(f0_t[mask], nan=100.0, posinf=2000.0, neginf=20.0), 20.0, 2000.0)
+        err = (torch.log2(f0_p_m) - torch.log2(f0_t_m)).abs().mean()
         return err
 
-    def loss_curriculum(self, pred, target, scales, overlap, step, ramp0=150, ramp1=400, touch=None, sound_id=None, return_losses=False):
+    def loss_curriculum(self, pred, target, scales, overlap, step, ramp0=150, ramp1=400,
+                        touch=None, sound_id=None, return_losses=False,
+                        w_lin=None, w_rms=None, onset_rms_factor=None):
         """
         Curriculum loss with linear weight on spectral loss and RMS envelope loss.
         Optional onset weighting for multiscale spectral terms.
@@ -511,10 +538,17 @@ class SensorDDSP(nn.Module):
                 touch_time > 2 s get +0.5x weight on the spectral terms (sustained-touch emphasis)
             sound_id: optional (B,) for the harmonic-comb loss
             return_losses: if True, return dict of individual loss components
+            w_lin: optional override for linear spectral weight (defaults to self.w_lin)
+            w_rms: optional override for RMS envelope weight (defaults to self.w_rms)
+            onset_rms_factor: optional factor override for RMS envelope onset weighting
 
         Returns:
             scalar loss or (scalar loss, dict of losses)
         """
+        eff_w_lin = self.w_lin if w_lin is None else float(w_lin)
+        eff_w_rms = self.w_rms if w_rms is None else float(w_rms)
+        eff_rms_factor = self.onset_rms_factor if onset_rms_factor is None else onset_rms_factor
+
         pred_stft = multiscale_fft(pred, scales, overlap)
         target_stft = multiscale_fft(target, scales, overlap)
 
@@ -525,7 +559,7 @@ class SensorDDSP(nn.Module):
             hop = int(s * (1 - overlap))
             block = self.block_size
             idx = torch.clamp((torch.arange(n_frames, device=device) * hop) // block, max=touch.shape[1] - 1)
-            w = 1.0 + 0.5 * (touch[:, idx, 0] > 2.0/30.0).float()  # (B, frames)
+            w = 1.0 + 0.5 * (touch[:, idx, 0] > float(math.log1p(2.0))).float()  # (B, frames)
             return w.unsqueeze(1)  # V8c: (B, 1, frames) to broadcast with (B, freqs, frames)
 
         lin_loss = 0.0
@@ -551,8 +585,6 @@ class SensorDDSP(nn.Module):
         target_log_rms = self.frame_log_rms(target)
         rms_loss = (pred_log_rms - target_log_rms).abs().mean()
 
-        total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
-
         # Onset-weighted spectral + RMS loss (V8b: one 100 Hz profile, shared; lin/lg weighted
         # separately so the 100x lin / ramped-w lg balance from V6 is preserved)
         if self.onset_weighting['enabled'] and touch is not None:
@@ -573,19 +605,20 @@ class SensorDDSP(nn.Module):
             lin_loss = lin_loss_w / len(scales)
             lg_loss = lg_loss_w / len(scales)
 
-            # RMS envelope term: same profile aligned to block grid
+            # RMS envelope term: profile aligned to block grid
+            w100_rms = self._onset_weight_profile_100hz(touch[..., :1], factor_override=eff_rms_factor) if eff_rms_factor is not None else w100
             T_rms = pred_log_rms.shape[1]
-            if w100.shape[1] >= T_rms:
-                w_r = w100[:, :T_rms, :]
+            if w100_rms.shape[1] >= T_rms:
+                w_r = w100_rms[:, :T_rms, :]
             else:
-                pad = torch.ones_like(w100[:, :1, :]).expand(-1, T_rms - w100.shape[1], -1)
-                w_r = torch.cat([w100, pad], dim=1)
+                pad = torch.ones_like(w100_rms[:, :1, :]).expand(-1, T_rms - w100_rms.shape[1], -1)
+                w_r = torch.cat([w100_rms, pad], dim=1)
             d_rms = (pred_log_rms - target_log_rms).abs()
-            w_rms = w_r.reshape(d_rms.shape)  # match (B,T) or (B,T,1)
-            rms_loss = (d_rms * w_rms).sum() / w_rms.sum().clamp(min=1e-6)
+            w_rms_grid = w_r.reshape(d_rms.shape)  # match (B,T) or (B,T,1)
+            rms_loss = (d_rms * w_rms_grid).sum() / w_rms_grid.sum().clamp(min=1e-6)
 
         multiscale_loss = (lin_loss + lg_loss)
-        total = 100.0 * lin_loss + w * lg_loss + 1.0 * rms_loss
+        total = eff_w_lin * lin_loss + w * lg_loss + eff_w_rms * rms_loss
 
         # v4: modulation-depth match on sustained-touch frames (touch_time > 2 s)
         if touch is not None and touch.shape[-1] >= 1:
@@ -616,13 +649,16 @@ class SensorDDSP(nn.Module):
             total = total + getattr(self, 'w_attack', 0.0) * w * atk_loss
 
         # Harmonic-comb loss for f0 supervision, ramped in with the log term, weight 0.0x (per review: octave-ambiguous)
+        f0_reg_val = torch.tensor(0.0, device=pred.device)
         if sound_id is not None:
             comb = self.harmonic_comb_loss(pred, target, sound_id, scales, overlap)
             total = total + 0.0 * w * comb
             # Self-supervised f0 regression (target-derived f0 track), weight 1.0x ramped
             f0_pred = getattr(self, '_last_f0', None)
             if f0_pred is not None and f0_pred.shape[1] == target.shape[1] // self.block_size:
-                total = total + 1.0 * w * self.f0_regression_loss(f0_pred, target)
+                f0_reg_loss = self.f0_regression_loss(f0_pred, target)
+                f0_reg_val = f0_reg_loss
+                total = total + 1.0 * w * f0_reg_loss
 
         if return_losses:
             details = {
@@ -630,6 +666,8 @@ class SensorDDSP(nn.Module):
                 'lin': lin_loss,
                 'lg': lg_loss,
                 'rms': rms_loss,
+                'f0_reg': f0_reg_val,
+                'total': total,
             }
             return total, details
         
@@ -863,7 +901,7 @@ class SensorDDSP(nn.Module):
         
         return weights_per_scale
 
-    def _onset_weight_profile_100hz(self, touch):
+    def _onset_weight_profile_100hz(self, touch, factor_override=None):
         """One onset weight profile at the touch rate (100 Hz), causal decaying.
 
         w(t) = 1 + (k-1) * [ exp(-t/tau) response to onset for t in [0, window_ms]
@@ -872,7 +910,7 @@ class SensorDDSP(nn.Module):
         Returns (B, T, 1).
         """
         ow = self.onset_weighting
-        k = ow.get('factor', 5.0)
+        k = ow.get('factor', 5.0) if factor_override is None else float(factor_override)
         window_ms = ow.get('window_ms', 600)
         tau_ms = ow.get('decay_tau_ms', 200)  # kept for back-compat
         peak_ms = ow.get('peak_ms', 350)  # gamma peak: measured audio event at ~330-360ms after crossing
@@ -892,10 +930,11 @@ class SensorDDSP(nn.Module):
         # flat pre-roll box: 0.5 boost over [onset-pre_ms, onset)
         pre_frames = int(pre_ms * rate / 1000)
         pre = torch.zeros_like(onset)
-        if pre_frames > 0 and pre_frames < T:
+        if pre_frames > 0:
             box = torch.ones(1, 1, pre_frames, device=onset.device)
-            c = F.conv1d(onset.transpose(1, 2), box)  # c[i] = sum onset[i..i+pre-1] (length T-pre+1)
-            pre[:, :c.shape[2], :] = (c[..., :T].transpose(1, 2) > 0).float() * 0.5
+            padded = F.pad(onset.transpose(1, 2), (0, pre_frames))
+            c = F.conv1d(padded, box)[..., 1:T + 1]
+            pre = (c.transpose(1, 2) > 0).float() * 0.5
         w = 1.0 + (k - 1.0) * (prof + pre)
         return w.clamp(max=k)
 
