@@ -13,7 +13,7 @@ data:
   align_audio: false
 
 model:
-  n_sounds: 5
+  n_sounds: 4  # Excluded 04_modularPercussions (percussive vs sustained timbral mismatch)
   hidden_size: 512
   n_harmonic: 100
   n_bands: 65
@@ -21,14 +21,14 @@ model:
   block_size: 480
   sound_emb_dim: 16
   max_f0_octaves: 2.0
-  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+  f0_base_hz_override: [110.0, 210.0, 100.0, 110.0]  # canopy, forestPad, swarm, moss
   
-  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
-  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
-  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0]
   
-  # Attack lag (from v9train-report baseline)
-  attack_lag_s: [0.023, 0.026, 0.065, 0.040, 0.025]
+  # Attack lag (from v9train-report baseline, percussion removed)
+  attack_lag_s: [0.023, 0.026, 0.065, 0.025]
   
   # Onset weighting - A4 winner config
   onset_weighting:
@@ -66,8 +66,8 @@ train:
   scales: [4096, 2048, 1024, 512, 256, 128]
   overlap: 0.75
   
-  # Validation (D6 full-file)
-  eval_curves: ["004", "011", "017"]  # v6 held-out val curves
+  # Validation (D6 full-file, stratified split with short/medium/long touch)
+  eval_curves: ["001", "003", "007", "008", "009", "012", "013", "014", "015", "016", "019"]
   
   # Misc
   seed: 0

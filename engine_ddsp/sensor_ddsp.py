@@ -169,7 +169,8 @@ class SensorDDSP(nn.Module):
             self.fast_head.weight.zero_()
             self.fast_head.bias.zero_()
         # V8c: per-sound attack lag (audio event lands ~+0.4s after the 0.98 crossing; Task 2 refines)
-        self.register_buffer('attack_lag_s', torch.tensor([0.38, 0.38, 0.42, 0.245, 0.39]))  # measured per-sound attack lag (attack_lag_report.json)
+        # Default for 4 sounds (canopy, forestPad, swarm, moss); overridden by config
+        self.register_buffer('attack_lag_s', torch.tensor([0.38, 0.38, 0.42, 0.39]))  # measured per-sound attack lag (attack_lag_report.json)
         if attack_lag_s is not None:
             self.set_attack_lag(attack_lag_s)
 

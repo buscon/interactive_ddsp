@@ -136,7 +136,16 @@ def evaluate_model(model, val_items, chunk_s, scales, overlap, device):
     model.eval()
     val_losses = []
     silence_losses = []
-    sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
+    # Derive sound_names_ordered from index.json (not hardcoded)
+    index_path = os.path.join(os.path.dirname(val_items[0]['path']), 'index.json')
+    if os.path.exists(index_path):
+        with open(index_path) as f:
+            index = json.load(f)
+        # Sort sound_ids by value to get ordered names
+        sound_ids = index.get('sound_ids', {})
+        sound_names_ordered = sorted(sound_ids.keys(), key=lambda x: sound_ids[x])
+    else:
+        sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "05_moss_and_mist"]  # Fallback (4 sounds)
     val_losses_by_sound = {s: [] for s in sound_names_ordered}
     silence_by_sound = {s: [] for s in sound_names_ordered}
 
@@ -384,8 +393,8 @@ def main():
     if override:
         f0_base = list(override)  # SC-source roots, not pYIN
     else:
-        # Fallback: default values
-        f0_base = [110.0, 210.0, 100.0, 200.0, 110.0]
+        # Fallback: default values for 4 sounds (canopy, forestPad, swarm, moss)
+        f0_base = [110.0, 210.0, 100.0, 110.0]
     print(f" f0_base Hz: {f0_base}")
 
     # Run directory
@@ -412,7 +421,14 @@ def main():
     writer = SummaryWriter(run_dir, flush_secs=20)
     
     # CSV header with per-sound val columns and attack metrics
-    sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
+    # Derive sound_names_ordered from config (f0_base_hz_override length) or fallback
+    f0_override = config["model"].get("f0_base_hz_override")
+    if f0_override and len(f0_override) == 4:
+        sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "05_moss_and_mist"]
+    elif f0_override and len(f0_override) == 5:
+        sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "04_modularPercussions", "05_moss_and_mist"]
+    else:
+        sound_names_ordered = ["01_canopy", "02_forestPad", "03_harmonicSwarm", "05_moss_and_mist"]  # Default 4 sounds
     csv_header = "step,train_loss,report_loss,val_loss,silence_loss," + ",".join([f"val_{s}" for s in sound_names_ordered]) + "," + ",".join([f"sil_{s}" for s in sound_names_ordered]) + ",val_med_abs_dpk_db,val_med_abs_dtpk_ms,val_med_p_bump_db\n"
     log_file = open(os.path.join(run_dir, "train_log.csv"), "w")
     log_file.write(csv_header)
