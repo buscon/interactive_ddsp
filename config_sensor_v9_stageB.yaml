@@ -27,8 +27,9 @@ model:
   lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0]
   lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0]
   
-  # Attack lag (from v9train-report baseline, percussion removed)
-  attack_lag_s: [0.023, 0.026, 0.065, 0.025]
+  # Attack lag: default values (measured ~0.4s audio event lag after touch onset)
+  # Previous small values (0.02-0.06s) were incorrect — model default was 0.38-0.42s
+  attack_lag_s: [0.38, 0.38, 0.42, 0.39]
   
   # Onset weighting - A4 winner config
   onset_weighting:
