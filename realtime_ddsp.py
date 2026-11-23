@@ -241,14 +241,16 @@ def load_sensor_ddsp(
     model.load_state_dict(state_dict, strict=True)
 
     # Apply explicit config lfo_*_base overrides afterward if provided
+    # Use register_buffer (not .copy_) because V9 4-sound checkpoints may save
+    # 5-element default buffers while config.yaml specifies 4-element overrides.
     for buf_name in ("lfo_rate_base", "lfo_depth_mul_base", "lfo_depth_add_base"):
         if buf_name in model_cfg and model_cfg[buf_name] is not None:
             vals = list(model_cfg[buf_name])
             if len(vals) == n_sounds:
-                with torch.no_grad():
-                    getattr(model, buf_name).copy_(
-                        torch.tensor(vals, dtype=getattr(model, buf_name).dtype)
-                    )
+                model.register_buffer(
+                    buf_name,
+                    torch.tensor(vals, dtype=getattr(model, buf_name).dtype),
+                )
 
     model.to(device)
     model.eval()
@@ -810,6 +812,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to checkpoint directory (with state_final.pth) or .pth file.",
     )
     p.add_argument(
+        "--run",
+        type=str,
+        default=None,
+        help="Run directory containing config.yaml and checkpoint (alias for --checkpoint <run>/<ckpt>).",
+    )
+    p.add_argument(
+        "--ckpt",
+        type=str,
+        default="state_final.pth",
+        help="Checkpoint filename inside --run directory (default: state_final.pth).",
+    )
+    p.add_argument(
         "--config",
         type=str,
         default=None,
@@ -878,8 +892,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(sd.query_devices())
         return 0
 
-    if not args.checkpoint:
-        parser.error("--checkpoint is required unless --list-devices is set.")
+    ckpt_arg = args.checkpoint
+    if ckpt_arg is None and args.run:
+        ckpt_arg = os.path.join(args.run, args.ckpt)
+    if not ckpt_arg:
+        parser.error("--checkpoint or --run is required unless --list-devices is set.")
 
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -890,7 +907,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Avoid OpenMP thread-pool wakeup spikes on small B=1, T=1 matmuls
         torch.set_num_threads(1)
 
-    model, _ = load_sensor_ddsp(args.checkpoint, device=device, config_path=args.config)
+    model, _ = load_sensor_ddsp(ckpt_arg, device=device, config_path=args.config)
     engine = StreamingSensorDDSP(
         model=model,
         device=device,
