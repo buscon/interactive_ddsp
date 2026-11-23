@@ -638,7 +638,7 @@ def main():
         last_eval_step = -args.eval_every  # Ensure we eval at step 0
         
         # Initial evaluation at step 0 (before any updates)
-        val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
+        val_loss, silence_loss, val_losses_by_sound, silence_by_sound, attack_stats = evaluate_model(
             model, val_items, chunk_s, scales, overlap, device
         )
         best_val_loss = val_loss if val_loss is not None else float("inf")
@@ -732,7 +732,7 @@ def main():
                 should_eval = (step == 0) or (step % args.eval_every == 0) or (step == args.steps - 1)
                 
                 if should_eval:
-                    val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
+                    val_loss, silence_loss, val_losses_by_sound, silence_by_sound, attack_stats = evaluate_model(
                         model, val_items, chunk_s, scales, overlap, device
                     )
                     
@@ -835,7 +835,7 @@ def main():
         # Final evaluation at last step (step 60)
         if step != effective_steps - 1:
             # Eval at last step
-            val_loss, silence_loss, val_losses_by_sound, silence_by_sound = evaluate_model(
+            val_loss, silence_loss, val_losses_by_sound, silence_by_sound, attack_stats = evaluate_model(
                 model, val_items, chunk_s, scales, overlap, device
             )
             
