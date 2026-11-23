@@ -3,13 +3,17 @@ SensorDDSP dataset and f0 estimation utilities for v5.
 Loads aligned proximity sensor + audio data from bakeoff_data_aligned_v5 (old
 provenance) or bakeoff_data_aligned_v6 (v6 provenance).
 
-v6 audio offset: in v6 npz files the audio lags the sensor clock by offset_s
-(0.236-0.400 s, recording artifact). With align_audio=True (default) and an npz
-that carries offset_s, audio is shifted to realign it with the sensor clock:
-aligned_audio[n] = audio[n + round(offset_s * 48000)]. The sample tail that no
-longer has a matching frame is trimmed (no zero padding). Sensor, touch_time and
-note labels stay on the 100 Hz sensor clock and are only trimmed to T_eff =
-floor((n_samples - shift) / 480).
+Audio alignment:
+- v6 npz files: audio is ALREADY on the sensor clock (sensor = ch4 of the same
+  recording; the touch-layer onset sits +2 ms after the touch_time onset without
+  any shift). offset_s is metadata only (recording time vs. planned curve). The
+  default loader (align_audio=False) therefore applies no shift and no trim:
+  T = index T, audio/sensor/touch_time are used exactly as stored.
+- align_audio=True is LEGACY-ONLY, for data whose audio lags the sensor clock
+  by offset_s. It is NOT for v6. When requested and the npz has offset_s:
+  aligned_audio[n] = audio[n + round(offset_s * 48000)], the sample tail with no
+  matching frame is trimmed (no zero padding), and sensor/touch_time/notes are
+  trimmed to T_eff = floor((n_samples - shift) / 480).
 """
 import json
 import os
@@ -71,7 +75,7 @@ class AlignedChunkDatasetV5(Dataset):
 
     def __init__(self, root, split, chunk_s=10.0, sounds=None, curves=None,
                  epoch_len=None, seed=0, train=True, notes_json=None,
-                 align_audio=True):
+                 align_audio=False):
         """
         Args:
             root: path to bakeoff_data_aligned_v5 or bakeoff_data_aligned_v6
@@ -83,9 +87,10 @@ class AlignedChunkDatasetV5(Dataset):
             seed: random seed for shuffling
             train: True for random chunks, False for deterministic non-overlapping
             notes_json: path to notes JSON file (default: bakeoff_notes_v5.json)
-            align_audio: if True and the npz has offset_s, shift audio by
-                offset_s to align it with the sensor clock and trim the tail
-                (see module docstring). Ignored for npz without offset_s.
+            align_audio: default False (v6 audio is already on the sensor clock;
+                no shift, no trim). True is legacy-only: shift audio by offset_s
+                and trim the tail when the npz has offset_s (see module docstring).
+                Never use True for v6.
         """
         # Set notes path if provided
         if notes_json is not None:
@@ -115,8 +120,6 @@ class AlignedChunkDatasetV5(Dataset):
                 f"Provenance mismatch: expected {expected_n} files, "
                 f"got {self.index['n_files']}"
             )
-        # v6 datasets must carry offset_s in every npz (checked at load time)
-        self.is_v6 = source_dir == self.V6_PROVENANCE_ROOT
         
         # Filter files by split
         self.files = [f for f in self.index["files"] if f["split"] == split]
@@ -167,10 +170,6 @@ class AlignedChunkDatasetV5(Dataset):
             path = f["path"]
             data = np.load(path)
             has_offset = "offset_s" in data.files
-            if self.is_v6 and not has_offset:
-                raise ValueError(
-                    f"v6 dataset npz missing offset_s: {path}"
-                )
             audio_raw = data["audio"]
             sensor = data["sensor"].astype(np.float32)
             touch_time = data["touch_time"].astype(np.float32)

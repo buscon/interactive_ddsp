@@ -88,7 +88,7 @@ def test_shift_direction_and_trim():
     root = os.path.join(tmp, "ds")
     notes = write_dataset(root, V6_ROOT, n_files=3)
     with whitelist(n_files_for_v6=3):
-        ds = DS(root, "val", chunk_s=0.1, train=False, notes_json=notes)
+        ds = DS(root, "val", chunk_s=0.1, train=False, notes_json=notes, align_audio=True)
     assert len(ds.loaded) == 1
     fd = ds.full("01_canopy", "001")
     # click at raw sample CLICK_K + SHIFT must land at aligned sample CLICK_K
@@ -116,7 +116,7 @@ def test_chunks_no_padding_and_epoch_len_consistent():
     notes = write_dataset(root, V6_ROOT, n_files=3)
     chunk_s = 0.1  # 10 frames, 4800 samples
     with whitelist(n_files_for_v6=3):
-        ds = DS(root, "train", chunk_s=chunk_s, train=False, notes_json=notes)
+        ds = DS(root, "train", chunk_s=chunk_s, train=False, notes_json=notes, align_audio=True)
     per_file = (T_EFF - 10) // 10 + 1   # = 2
     assert len(ds.loaded) == 2
     assert len(ds) == 2 * per_file == 4
@@ -132,7 +132,8 @@ def test_chunks_no_padding_and_epoch_len_consistent():
         assert np.array_equal(item["sensor"], fd["sensor"][o:o + 10])
     # random mode: every served chunk is full length and inside T_eff
     with whitelist(n_files_for_v6=3):
-        dsr = DS(root, "train", chunk_s=chunk_s, train=True, notes_json=notes, seed=1)
+        dsr = DS(root, "train", chunk_s=chunk_s, train=True, notes_json=notes, seed=1,
+                 align_audio=True)
     for idx in range(50):
         item = dsr[idx]
         assert item["audio"].shape == (4800,)
@@ -145,30 +146,47 @@ def test_epoch_len_matches_deterministic_chunk_count():
     notes = write_dataset(root, V6_ROOT, n_files=3)
     # chunk_s 0.2 -> 20 frames: exactly one chunk per file at T_EFF=20
     with whitelist(n_files_for_v6=3):
-        ds = DS(root, "train", chunk_s=0.2, train=False, notes_json=notes)
+        ds = DS(root, "train", chunk_s=0.2, train=False, notes_json=notes, align_audio=True)
     assert len(ds) == 2
     assert ds[0]["audio"].shape == (9600,)
     assert ds[1]["audio"].shape == (9600,)
     # chunk_s 0.3 -> 30 frames > T_EFF: no chunks at all
     with whitelist(n_files_for_v6=3):
-        ds0 = DS(root, "train", chunk_s=0.3, train=False, notes_json=notes)
+        ds0 = DS(root, "train", chunk_s=0.3, train=False, notes_json=notes, align_audio=True)
     assert len(ds0) == 0
 
 
 # ---------------------------------------------------------------- (b) missing offset_s
-def test_v6_missing_offset_raises():
+def test_v6_missing_offset_loads_unshifted():
+    """v6 without offset_s loads fine: no shift, no trim (T = index T)."""
     tmp = _tmp()
     root = os.path.join(tmp, "ds")
     notes = write_dataset(root, V6_ROOT, n_files=3, with_offset=False)
-    for align in (True, False):
-        raised = False
+    for align in (False, True):  # without offset_s there is nothing to shift
         with whitelist(n_files_for_v6=3):
-            try:
-                DS(root, "train", chunk_s=0.1, train=False, notes_json=notes,
-                   align_audio=align)
-            except ValueError as e:
-                raised = "offset_s" in str(e)
-        assert raised, f"expected ValueError for align_audio={align}"
+            ds = DS(root, "val", chunk_s=0.1, train=False, notes_json=notes,
+                    align_audio=align)
+        fd = ds.full("01_canopy", "001")
+        assert len(fd["sensor"]) == RAW_T
+        assert len(fd["audio"]) == RAW_T * 480
+        assert int(np.argmax(np.abs(fd["audio"]))) == CLICK_K + SHIFT
+
+
+# ---------------------------------------------------------------- default path (no shift)
+def test_default_v6_no_shift_no_trim():
+    """Default align_audio=False on v6: audio stored as-is, T unchanged."""
+    tmp = _tmp()
+    root = os.path.join(tmp, "ds")
+    notes = write_dataset(root, V6_ROOT, n_files=3)
+    with whitelist(n_files_for_v6=3):
+        ds = DS(root, "val", chunk_s=0.1, train=False, notes_json=notes)
+    assert ds.align_audio is False
+    fd = ds.full("01_canopy", "001")
+    assert len(fd["sensor"]) == RAW_T
+    assert len(fd["audio"]) == RAW_T * 480
+    assert int(np.argmax(np.abs(fd["audio"]))) == CLICK_K + SHIFT  # not moved
+    raw = np.load(os.path.join(root, "01_canopy_proximity_curve_001.npz"))
+    assert np.array_equal(fd["audio"], raw["audio"].astype(np.float32) / 32768.0)
 
 
 # ---------------------------------------------------------------- whitelist
@@ -261,6 +279,7 @@ def test_real_v6_smoke():
         print("  (skip: real v6 dataset not present)")
         return
     ds = DS(V6_DIR, "val", chunk_s=10.0, train=False, notes_json=V6_NOTES)
+    assert ds.align_audio is False
     assert len(ds) > 0
     assert len(ds) == sum(DS._count_chunks(ds, f) for f in ds.loaded)
     for i in range(len(ds)):
@@ -270,17 +289,39 @@ def test_real_v6_smoke():
         assert item["note"].shape == (ds.chunk_frames,)
     fd = ds.full("01_canopy", "004")
     n = len(fd["sensor"])
-    assert len(fd["audio"]) == 480 * n
     assert len(fd["touch_raw"]) == n
     assert len(fd["note"]) == n
     assert fd["audio"].dtype == np.float32
+    # v6 audio carries a sub-frame remainder (npz audio is not an exact multiple
+    # of 480 for this file); the default path does not trim it.
+    assert 0 <= len(fd["audio"]) - 480 * n < 480
+
+    # default loader: audio equals the npz audio exactly (no shift)
+    raw = np.load(os.path.join(V6_DIR, "01_canopy_proximity_curve_004.npz"))
+    raw_audio = raw["audio"]
+    assert len(fd["audio"]) == len(raw_audio)
+    assert np.array_equal(fd["audio"], raw_audio.astype(np.float32) / 32768.0)
+    assert np.array_equal(fd["touch_raw"], raw["touch_time"])
+
+    # data contract: touch_layer onset is 0..10 ms after the touch_time onset
+    tt = raw["touch_time"]
+    tl = raw["touch_layer"].astype(np.float64)
+    edges = np.where((tt[1:] > 0) & (tt[:-1] <= 0))[0] + 1
+    assert len(edges) >= 3
+    for f in edges[:3]:
+        lo, hi = f * 480 - 4800, f * 480 + 4800   # +-100 ms window
+        w = np.abs(tl[lo:hi])
+        k = int(np.where(w >= 0.1 * w.max())[0][0])  # first sample >= 10% of peak
+        onset_ms = (lo + k - f * 480) / 48.0
+        assert 0.0 <= onset_ms <= 10.0, (f, onset_ms)
 
 
 TESTS = [
     test_shift_direction_and_trim,
     test_chunks_no_padding_and_epoch_len_consistent,
     test_epoch_len_matches_deterministic_chunk_count,
-    test_v6_missing_offset_raises,
+    test_v6_missing_offset_loads_unshifted,
+    test_default_v6_no_shift_no_trim,
     test_whitelist_rejects_unknown_and_wrong_n,
     test_align_false_is_unshifted,
     test_old_provenance_no_offset_unchanged,
