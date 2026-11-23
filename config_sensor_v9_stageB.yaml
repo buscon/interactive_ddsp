@@ -1,0 +1,77 @@
+# SensorDDSP v9 Stage B Configuration
+# Winner: A4 (R=10, peak_ms=40) - best timing + stable f0
+# 2000-step training with cosine LR decay
+
+data:
+  root: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_data_aligned_v6
+  chunk_s: 10.0
+  train_sounds: null  # null = all
+  val_sounds: null
+  train_curves: null  # null = all in train split
+  val_curves: null
+  notes_json: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_notes_v6.json
+  align_audio: false
+
+model:
+  n_sounds: 5
+  hidden_size: 512
+  n_harmonic: 100
+  n_bands: 65
+  sampling_rate: 48000
+  block_size: 480
+  sound_emb_dim: 16
+  max_f0_octaves: 2.0
+  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+  
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
+  
+  # Attack lag (from v9train-report baseline)
+  attack_lag_s: [0.023, 0.026, 0.065, 0.040, 0.025]
+  
+  # Onset weighting - A4 winner config
+  onset_weighting:
+    enabled: true
+    factor: 5.0
+    pre_ms: 20
+    window_ms: 400
+    peak_ms: 40  # ← A4 winner (vs v9's 90)
+    touch_rate_hz: 100
+  
+  touch_amp_head: false
+
+loss_weights:
+  w_multiscale: 1.0
+  w_lin: 100.0
+  w_rms: 10.0    # ← A4 value (vs v9's 4.0)
+  onset_rms_factor: null
+  w_attack: 0.0
+  w_mod_spec: 0.0
+
+train:
+  # Cosine LR decay (A4 used this)
+  lr_start: 1.0e-3
+  lr_stop: 1.0e-4
+  decay_over: 2000
+  warmup_steps: 100
+  
+  # Training schedule
+  steps: 2000
+  batch: 8
+  eval_every: 250
+  save_every: 250
+  
+  # Data
+  scales: [4096, 2048, 1024, 512, 256, 128]
+  overlap: 0.75
+  
+  # Validation (D6 full-file)
+  eval_curves: ["004", "011", "017"]  # v6 held-out val curves
+  
+  # Misc
+  seed: 0
+
+output:
+  run_name: v9_stageB_A4
+  root: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/runs/v9_stageB
