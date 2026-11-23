@@ -49,7 +49,7 @@ class SensorDDSP(nn.Module):
     def __init__(self, f0_base_hz, n_sounds=5, hidden_size=512,
                  n_harmonic=100, n_bands=65, sampling_rate=48000,
                  block_size=480, sound_emb_dim=16, max_f0_octaves=1.0,
-                 tilt_init=True, onset_weighting=None):
+                 tilt_init=True, onset_weighting=None, attack_lag_s=None):
         """
         Args:
             f0_base_hz: list of base f0 per sound ID (len = n_sounds)
@@ -68,6 +68,11 @@ class SensorDDSP(nn.Module):
                 - window_ms: int (150)
                 - dilate_frames: int (1)
                 - touch_rate_hz: int (100)
+                - peak_ms / pre_ms / decay_tau_ms / dilate_ms: optional, passed through
+                  (profile defaults apply when absent)
+            attack_lag_s: optional list/tuple/tensor of per-sound attack lags in seconds
+                (order canopy, forestPad, swarm, modularPercussions, moss); None keeps
+                the built-in defaults.
         """
         super().__init__()
         
@@ -93,13 +98,16 @@ class SensorDDSP(nn.Module):
                 'touch_rate_hz': 100
             }
         else:
+            # Pass ALL keys through (peak_ms/pre_ms/decay_tau_ms were silently dropped before).
+            # NOTE: this changes behaviour of old configs that set peak_ms/pre_ms (v8c ran with the defaults).
             self.onset_weighting = {
-                'enabled': onset_weighting.get('enabled', False),
-                'factor': onset_weighting.get('factor', 5.0),
-                'window_ms': onset_weighting.get('window_ms', 150),
-                'dilate_frames': onset_weighting.get('dilate_frames', 1),
-                'touch_rate_hz': onset_weighting.get('touch_rate_hz', 100)
+                'enabled': False,
+                'factor': 5.0,
+                'window_ms': 150,
+                'dilate_frames': 1,
+                'touch_rate_hz': 100
             }
+            self.onset_weighting.update(onset_weighting)
         
         # Register f0_base as buffer (per sound)
         self.register_buffer(
@@ -152,7 +160,9 @@ class SensorDDSP(nn.Module):
             self.fast_head.bias.zero_()
         # V8c: per-sound attack lag (audio event lands ~+0.4s after the 0.98 crossing; Task 2 refines)
         self.register_buffer('attack_lag_s', torch.tensor([0.38, 0.38, 0.42, 0.245, 0.39]))  # measured per-sound attack lag (attack_lag_report.json)
-        
+        if attack_lag_s is not None:
+            self.set_attack_lag(attack_lag_s)
+
         # Initialize f0_head bias to 0 so initial f0 = base
         self.f0_head.bias.data.zero_()
         
@@ -167,6 +177,16 @@ class SensorDDSP(nn.Module):
         self.reverb = Reverb(length=sampling_rate, sampling_rate=sampling_rate,
                              initial_wet=-5)
     
+    def set_attack_lag(self, values):
+        """Copy per-sound attack lags (s, sound_id order) in place into the attack_lag_s buffer.
+        Accepts list/tuple/tensor of length n_sounds; keeps the buffer's dtype and device."""
+        buf = self.attack_lag_s
+        v = torch.as_tensor(values, dtype=buf.dtype, device=buf.device).reshape(-1)
+        if v.numel() != self.n_sounds:
+            raise ValueError(f"attack_lag_s needs {self.n_sounds} values, got {v.numel()}")
+        with torch.no_grad():
+            buf.copy_(v.detach())
+
     def _tilt_init(self):
         """Apply tilt initialization to heads."""
         # Multiply harmonic_head and noise_head weights by 0.1
