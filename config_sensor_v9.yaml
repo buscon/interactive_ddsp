@@ -1,0 +1,71 @@
+# V9 config — trained from scratch on the v6 aligned dataset (sensor-clock audio, align_audio off)
+# Based on config_sensor_v8c_a.yaml (V8c Arm A: loss norm, vibrato lag, fast_head lag+10x lr)
+# Dataset: Dataset_v6_20261122_aligned; val curves 004/011/017, test curves 007/014/020
+
+data:
+  root: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_data_aligned_v6
+  chunk_s: 10.0
+  train_sounds: null  # null = all
+  val_sounds: null
+  train_curves: null  # null = all in train split
+  val_curves: null
+  # Touch onsets from sensor crossing 0.98 (OSC touch trigger), v6 notes
+  notes_json: /home/marcello/sentire/Recordings/Dataset_v6_20261122_aligned/bakeoff_notes_v6.json
+  # v6 audio is already on the sensor clock: no audio shift / trim
+  align_audio: false
+
+model:
+  n_sounds: 5
+  hidden_size: 512
+  n_harmonic: 100
+  n_bands: 65
+  sampling_rate: 48000
+  block_size: 480
+  sound_emb_dim: 16
+  max_f0_octaves: 2.0
+  # f0 roots from Sentire SC sources (sound_id order: canopy, forestPad, swarm, percussion, moss)
+  f0_base_hz_override: [110.0, 210.0, 100.0, 200.0, 110.0]
+
+  # v5/v6: LFO base tables (per sound) - from SC sources
+  # canopy: rate=1+clip(0.3t,1,30), depth_add=0.5t clip 0..20 (additive FM)
+  # swarm: rate=0.1+0.03t, depth_mul=(0.3+0.8t)% multiplicative
+  # forestPad/moss/percussion: no LFO
+  lfo_rate_base: [1.0, 0.0, 0.1, 0.0, 0.0]
+  lfo_depth_mul_base: [0.0, 0.0, 0.3, 0.0, 0.0]
+  lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0, 0.0]
+
+  # V9: per-sound attack lag (s, sound_id order canopy, forestPad, swarm, modularPercussions, moss)
+  # = touch-layer onset lag 2/5/44/22/4 ms + 21.3 ms limiter delay of the master target.
+  # Measured in docs/V9_LAG_MEASUREMENT.md.
+  attack_lag_s: [0.023, 0.026, 0.065, 0.043, 0.025]
+
+  # V9: onset weighting (onset-weighted spectral + RMS loss, causal)
+  onset_weighting:
+    enabled: true
+    factor: 5.0          # k=5.0
+    pre_ms: 25           # flat pre-roll before onset
+    window_ms: 400       # causal gamma window after onset
+    peak_ms: 90          # gamma peak after onset
+    touch_rate_hz: 100   # Touch feature rate
+
+# Loss weights
+loss_weights:
+  w_multiscale: 1.0
+  w_attack: 0.0          # Keep OFF (ablation proved harmful)
+  w_mod_spec: 0.0        # Keep OFF
+
+# Train schedule: from-scratch schedule copied from config_sensor.yaml / config_sensor_v6.yaml
+# (lr 1e-3 -> 1e-4 over 1000 steps, 2000 steps total). The 1000-step fine-tune schedule of
+# v8c_a is NOT used; there is no finetune block / init_checkpoint, so nothing is silently fine-tuned.
+train:
+  batch: 8
+  lr_start: 1.0e-3
+  lr_stop: 1.0e-4
+  decay_over: 1000  # steps
+  scales: [4096, 2048, 1024, 512, 256, 128]
+  overlap: 0.75
+  steps: 2000
+  seed: 0
+  eval_every: 250
+  eval_curves: [004, 011, 017]  # v6 held-out val curves
+  save_every: 250
