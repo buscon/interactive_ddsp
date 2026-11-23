@@ -75,7 +75,7 @@ class AlignedChunkDatasetV5(Dataset):
 
     def __init__(self, root, split, chunk_s=10.0, sounds=None, curves=None,
                  epoch_len=None, seed=0, train=True, notes_json=None,
-                 align_audio=False):
+                 align_audio=False, use_npz_note_hz=False):
         """
         Args:
             root: path to bakeoff_data_aligned_v5 or bakeoff_data_aligned_v6
@@ -91,6 +91,8 @@ class AlignedChunkDatasetV5(Dataset):
                 no shift, no trim). True is legacy-only: shift audio by offset_s
                 and trim the tail when the npz has offset_s (see module docstring).
                 Never use True for v6.
+            use_npz_note_hz: default False. If True and npz contains 'note_hz',
+                use it instead of notes_json labels.
         """
         # Set notes path if provided
         if notes_json is not None:
@@ -101,6 +103,7 @@ class AlignedChunkDatasetV5(Dataset):
         self.chunk_s = chunk_s
         self.train = train
         self.align_audio = align_audio
+        self.use_npz_note_hz = bool(use_npz_note_hz)
 
         # Load index
         index_path = os.path.join(root, "index.json")
@@ -173,6 +176,7 @@ class AlignedChunkDatasetV5(Dataset):
             audio_raw = data["audio"]
             sensor = data["sensor"].astype(np.float32)
             touch_time = data["touch_time"].astype(np.float32)
+            note_hz = data["note_hz"].astype(np.float32) if "note_hz" in data.files else None
             T = int(f["T"])
             if self.align_audio and has_offset:
                 # Audio lags the sensor clock by offset_s: drop the first
@@ -188,7 +192,11 @@ class AlignedChunkDatasetV5(Dataset):
                 audio_raw = audio_raw[shift:shift + T_eff * 480]
                 sensor = sensor[:T_eff]
                 touch_time = touch_time[:T_eff]
+                if note_hz is not None:
+                    note_hz = note_hz[:T_eff]
                 T = T_eff
+            if note_hz is not None:
+                note_hz = note_hz[:T]
             # audio: int16 -> float32 normalized
             audio = audio_raw.astype(np.float32) / 32768.0
             sound_id = self.sound_id_map[f["sound"]]
@@ -196,6 +204,7 @@ class AlignedChunkDatasetV5(Dataset):
                 "audio": audio,
                 "sensor": sensor,
                 "touch_time": touch_time,
+                "note_hz": note_hz,
                 "sound_id": sound_id,
                 "sound": f["sound"],
                 "curve": f["curve"],
@@ -280,17 +289,25 @@ class AlignedChunkDatasetV5(Dataset):
         # Stack to 3 features
         touch = np.stack([touch_feature_1, touch_feature_2, touch_feature_3], axis=-1)
         
-        # Note labels from bakeoff_notes_v5.json
-        note_key = f"{file_data['sound']}_proximity_curve_{file_data['curve']}"
-        note_full = _notes().get(note_key, [0.0] * len(touch_time))
-        # Ensure note_full is long enough for the chunk
-        if len(note_full) < end_frame:
-            # Pad with zeros if note labels are shorter than file
-            note_full = note_full + [0.0] * (end_frame - len(note_full))
-        note_chunk = np.asarray(note_full[offset:end_frame], dtype=np.float32)
-        # Pad note_chunk if needed (should match chunk_frames)
-        if len(note_chunk) < self.chunk_frames:
-            note_chunk = np.pad(note_chunk, (0, self.chunk_frames - len(note_chunk)), mode="constant")
+        # Note labels: from npz note_hz if requested and available, else from notes JSON
+        if self.use_npz_note_hz and file_data["note_hz"] is not None:
+            note_full = file_data["note_hz"]
+            if len(note_full) < end_frame:
+                note_full = np.pad(note_full, (0, end_frame - len(note_full)), mode="constant")
+            note_chunk = np.asarray(note_full[offset:end_frame], dtype=np.float32)
+            if len(note_chunk) < self.chunk_frames:
+                note_chunk = np.pad(note_chunk, (0, self.chunk_frames - len(note_chunk)), mode="constant")
+        else:
+            note_key = f"{file_data['sound']}_proximity_curve_{file_data['curve']}"
+            note_full = _notes().get(note_key, [0.0] * len(touch_time))
+            # Ensure note_full is long enough for the chunk
+            if len(note_full) < end_frame:
+                # Pad with zeros if note labels are shorter than file
+                note_full = note_full + [0.0] * (end_frame - len(note_full))
+            note_chunk = np.asarray(note_full[offset:end_frame], dtype=np.float32)
+            # Pad note_chunk if needed (should match chunk_frames)
+            if len(note_chunk) < self.chunk_frames:
+                note_chunk = np.pad(note_chunk, (0, self.chunk_frames - len(note_chunk)), mode="constant")
         
         return {
             "audio": audio_chunk.astype(np.float32),
@@ -322,13 +339,21 @@ class AlignedChunkDatasetV5(Dataset):
                 touch = np.stack([touch_feature_1, touch_feature_2, touch_feature_3], axis=-1)
                 
                 # Note labels - ensure same length as touch_time
-                note_key = f"{f['sound']}_proximity_curve_{f['curve']}"
-                note_full = _notes().get(note_key, [0.0]*len(touch_time))
-                if len(note_full) < len(touch_time):
-                    note_full = note_full + [0.0] * (len(touch_time) - len(note_full))
-                elif len(note_full) > len(touch_time):
-                    note_full = note_full[:len(touch_time)]
-                note = np.asarray(note_full, dtype=np.float32)
+                if self.use_npz_note_hz and f["note_hz"] is not None:
+                    note_full = f["note_hz"]
+                    if len(note_full) < len(touch_time):
+                        note_full = np.pad(note_full, (0, len(touch_time) - len(note_full)), mode="constant")
+                    elif len(note_full) > len(touch_time):
+                        note_full = note_full[:len(touch_time)]
+                    note = np.asarray(note_full, dtype=np.float32)
+                else:
+                    note_key = f"{f['sound']}_proximity_curve_{f['curve']}"
+                    note_full = _notes().get(note_key, [0.0]*len(touch_time))
+                    if len(note_full) < len(touch_time):
+                        note_full = note_full + [0.0] * (len(touch_time) - len(note_full))
+                    elif len(note_full) > len(touch_time):
+                        note_full = note_full[:len(touch_time)]
+                    note = np.asarray(note_full, dtype=np.float32)
                 
                 return {
                     "audio": audio,
