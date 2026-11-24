@@ -1,0 +1,10 @@
+model:
+  onset_weighting:
+    enabled: true
+    factor: 5.0
+    window_ms: 500
+    dilate_frames: 1
+    dilate_ms: 10
+    touch_rate_hz: 100
+
+# Keep everything else identical: notes_json bakeoff_notes_v7.json, finetune init_checkpoint stageB_v6/state_final.pth, lr 3e-4, steps 1000

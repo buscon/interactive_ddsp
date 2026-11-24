@@ -22,3 +22,9 @@ __pycache__/
 !docs/**
 bakeoff_data_aligned_v8/
 bakeoff_notes_v8c.json
+
+# v9 housekeeping (2026-11-24)
+logs/
+bakeoff_data_aligned_v5_03/
+bakeoff_notes_v5_audio.json
+bakeoff_notes_v5_touch_time.json

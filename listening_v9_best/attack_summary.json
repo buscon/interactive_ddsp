@@ -1,0 +1,73 @@
+{
+  "overall": {
+    "dpk_db": -10.861915409822469,
+    "dtpk_ms": 155.0,
+    "abs_dtpk_ms": 160.0,
+    "p_bump_db": 1.4115824299392328,
+    "t_bump_db": 7.930093106909673,
+    "dpre_db": 34.05189753315261,
+    "dp300_db": -3.7896084019103817,
+    "n_onsets": 76,
+    "pass": false
+  },
+  "per_sound": {
+    "01_canopy": {
+      "dpk_db": -10.103177285429474,
+      "dtpk_ms": 144.0,
+      "abs_dtpk_ms": 144.0,
+      "p_bump_db": 1.407028316342005,
+      "t_bump_db": 11.85470690429168,
+      "dpre_db": 71.65238314526633,
+      "dp300_db": 2.108341406055146,
+      "n_onsets": 18,
+      "pass": false
+    },
+    "02_forestPad": {
+      "dpk_db": -7.656581727085393,
+      "dtpk_ms": 194.5,
+      "abs_dtpk_ms": 194.5,
+      "p_bump_db": 0.42635682240407524,
+      "t_bump_db": 5.740434182429472,
+      "dpre_db": 18.590924858394814,
+      "dp300_db": -1.5464868305256045,
+      "n_onsets": 18,
+      "pass": false
+    },
+    "03_harmonicSwarm": {
+      "dpk_db": -12.97771457829618,
+      "dtpk_ms": 162.0,
+      "abs_dtpk_ms": 162.0,
+      "p_bump_db": 3.556631252613789,
+      "t_bump_db": 11.808232134780457,
+      "dpre_db": 87.21853268570841,
+      "dp300_db": -3.7896084019103817,
+      "n_onsets": 19,
+      "pass": false
+    },
+    "04_modularPercussions": {
+      "dpk_db": NaN,
+      "dtpk_ms": NaN,
+      "abs_dtpk_ms": NaN,
+      "p_bump_db": NaN,
+      "t_bump_db": NaN,
+      "dpre_db": NaN,
+      "dp300_db": NaN,
+      "n_onsets": 0,
+      "pass": false
+    },
+    "05_moss_and_mist": {
+      "dpk_db": -10.861915409822469,
+      "dtpk_ms": 130.0,
+      "abs_dtpk_ms": 147.0,
+      "p_bump_db": 1.4115824299392328,
+      "t_bump_db": 5.962639474452582,
+      "dpre_db": 5.5760635178654505,
+      "dp300_db": -7.118307405834214,
+      "n_onsets": 21,
+      "pass": false
+    }
+  },
+  "strict_pass_count": 0,
+  "strict_pass_total": 5,
+  "strict_pass_fraction": 0.0
+}
