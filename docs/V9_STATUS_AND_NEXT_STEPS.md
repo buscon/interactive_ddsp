@@ -73,9 +73,14 @@ model's default buffer. Its reason was that the measured values (0.02-0.06 s) we
   clock.
 
 So in every Stage B run since `d3db5ef`, the gated attack path (`fast_head`) opens about
-0.35 s after the real attack in the target. That fits the large positive dtpk (late attacks)
-seen in every run, and it would also explain why `fast_head` contributes almost nothing.
-This has not been tested yet. It is the first thing to check.
+0.35 s after the real attack in the target.
+
+**Correction (2026-11-24):** the late attacks are *not* explained by the lag alone. A
+one-seed comparison already existed on the A4 config (`touch_amp_head` off). With the small
+lag (`v9_stageB_fixed/v9_stageB_A4_s0`), the attack was 106 ms late with dpk −6.3 dB. With
+the 0.4 s lag (`v9_stageB_A4_s0_corrected`), it was 52 ms late with dpk −10.0 dB. Attacks
+were late with both lags. The small lag gave a louder peak and the large lag better timing.
+The 2-seed test on the current config is in `V9_LAGFIX_RESULTS.md`.
 
 ### 3.2 The freeze postmortem's explanation is unproven
 
