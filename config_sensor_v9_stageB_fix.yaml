@@ -28,7 +28,8 @@ model:
   lfo_depth_mul_base: [0.0, 0.0, 0.0, 0.0]  # was [0.0, 0.0, 0.3, 0.0]
   lfo_depth_add_base: [20.0, 0.0, 0.0, 0.0]
   
-  attack_lag_s: [0.38, 0.38, 0.42, 0.39]
+  # Attack lag (s): measured v6 touch-layer onset + 21.3 ms limiter delay (docs/V9_LAG_MEASUREMENT.md). Order: canopy, forestPad, swarm, moss.
+  attack_lag_s: [0.023, 0.026, 0.065, 0.025]
   
   onset_weighting:
     enabled: true
